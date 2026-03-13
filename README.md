@@ -22,8 +22,8 @@ The extension currently supports:
 - Metadata sidecar export as JSON.
 - Optional batch report JSON export.
 - Configurable download naming and folder templates.
-- A compact popup with explicit download and copy-URL actions plus collapsible details.
-- Duplicate controls plus local recent-download history export/reset.
+- A compact popup with download, refresh, settings, and crawl controls plus collapsible diagnostics.
+- Duplicate controls plus local download-history export/reset from the settings page.
 
 ## Installation
 
@@ -48,6 +48,7 @@ The extension uses your existing logged-in Instagram browser session. If the con
 
 The options page lets you configure:
 
+- Theme mode for the extension popup and settings page
 - Easy mode for direct left-click downloads with availability badges
 - Confirmation before download
 - Metadata sidecar export

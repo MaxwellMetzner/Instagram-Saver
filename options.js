@@ -1,4 +1,5 @@
 const DEFAULT_SETTINGS = {
+  themeMode: "light",
   easyMode: false,
   confirmBeforeDownload: true,
   saveMetadataSidecar: true,
@@ -19,6 +20,14 @@ const form = document.getElementById("settings-form");
 const statusEl = document.getElementById("status");
 const exportHistoryButton = document.getElementById("export-history-button");
 const clearHistoryButton = document.getElementById("clear-history-button");
+const themeModeField = document.getElementById("themeMode");
+
+function applyTheme(themeMode) {
+  const resolvedTheme = ["light", "dark", "instagram"].includes(themeMode)
+    ? themeMode
+    : DEFAULT_SETTINGS.themeMode;
+  document.documentElement.dataset.theme = resolvedTheme;
+}
 
 function setStatus(message) {
   statusEl.textContent = message;
@@ -40,6 +49,8 @@ async function loadSettings() {
         ? "none"
         : "history"
   };
+
+  applyTheme(resolvedSettings.themeMode);
 
   for (const [key, fallbackValue] of Object.entries(DEFAULT_SETTINGS)) {
     const field = form.elements.namedItem(key);
@@ -77,6 +88,7 @@ async function saveSettings(event) {
   }
 
   await chrome.storage.sync.set(payload);
+  applyTheme(payload.themeMode);
   setStatus("Settings saved.");
 }
 
@@ -116,7 +128,13 @@ clearHistoryButton.addEventListener("click", () => {
     setStatus("Failed to clear history.");
   });
 });
+
+themeModeField.addEventListener("change", () => {
+  applyTheme(themeModeField.value);
+});
+
 loadSettings().catch((error) => {
   console.error("[InstagramSaver] Failed to load settings", error);
+  applyTheme(DEFAULT_SETTINGS.themeMode);
   setStatus("Failed to load settings.");
 });

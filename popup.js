@@ -13,12 +13,10 @@ const metadataNoteEl = document.getElementById("metadata-note");
 const batchDiagnosticsBlock = document.getElementById("batch-diagnostics-block");
 const batchDiagnosticsListEl = document.getElementById("batch-diagnostics-list");
 const fileListEl = document.getElementById("file-list");
-const historyListEl = document.getElementById("history-list");
 const errorTitleEl = document.getElementById("error-title");
 const errorMessageEl = document.getElementById("error-message");
 const errorSuggestionEl = document.getElementById("error-suggestion");
 const downloadButton = document.getElementById("download-button");
-const copyButton = document.getElementById("copy-button");
 const refreshButton = document.getElementById("refresh-button");
 const settingsButton = document.getElementById("settings-button");
 const crawlActionsCard = document.getElementById("crawl-actions-card");
@@ -28,45 +26,18 @@ const crawlSummaryEl = document.getElementById("crawl-summary");
 const crawlDiagnosticsBlock = document.getElementById("crawl-diagnostics-block");
 const crawlDiagnosticsListEl = document.getElementById("crawl-diagnostics-list");
 const statusEl = document.getElementById("status");
+const DEFAULT_THEME_MODE = "light";
 
 let activeTab = null;
-let currentPreview = null;
 
-function describeHistoryEntry(entry) {
-  const date = entry?.recordedAt ? new Date(entry.recordedAt).toLocaleString() : "Unknown time";
-  const parts = [`${entry?.pageKind || "media"} @${entry?.username || "instagram"}`];
-  parts.push(`${entry?.downloaded || 0} downloaded`);
-  if (entry?.skipped) {
-    parts.push(`${entry.skipped} skipped`);
-  }
-  if (entry?.failed) {
-    parts.push(`${entry.failed} failed`);
-  }
-  return `${parts.join(" • ")} • ${date}`;
+function applyTheme(themeMode) {
+  const resolvedTheme = ["light", "dark", "instagram"].includes(themeMode) ? themeMode : DEFAULT_THEME_MODE;
+  document.documentElement.dataset.theme = resolvedTheme;
 }
 
-function renderHistory(history) {
-  historyListEl.replaceChildren();
-
-  if (!Array.isArray(history) || history.length === 0) {
-    const li = document.createElement("li");
-    li.textContent = "No recent activity yet.";
-    historyListEl.appendChild(li);
-    return;
-  }
-
-  for (const entry of history.slice(0, 3)) {
-    const li = document.createElement("li");
-    li.textContent = describeHistoryEntry(entry);
-    historyListEl.appendChild(li);
-  }
-}
-
-async function requestHistory() {
-  const response = await chrome.runtime.sendMessage({ type: "GET_DOWNLOAD_HISTORY" });
-  if (response?.ok) {
-    renderHistory(response.history);
-  }
+async function loadTheme() {
+  const { themeMode = DEFAULT_THEME_MODE } = await chrome.storage.sync.get({ themeMode: DEFAULT_THEME_MODE });
+  applyTheme(themeMode);
 }
 
 function setStatus(message, isError = false) {
@@ -76,7 +47,6 @@ function setStatus(message, isError = false) {
 
 function setBusy(isBusy) {
   downloadButton.disabled = isBusy;
-  copyButton.disabled = isBusy;
   refreshButton.disabled = isBusy;
   crawlButton.disabled = isBusy;
   resetCrawlButton.disabled = isBusy;
@@ -137,7 +107,6 @@ async function getActiveInstagramTab() {
 }
 
 function renderPreview(preview) {
-  currentPreview = preview;
   errorCard.classList.add("hidden");
   metricsCard.classList.remove("hidden");
   detailsCard.classList.remove("hidden");
@@ -190,7 +159,6 @@ function renderPreview(preview) {
 }
 
 function renderError(error) {
-  currentPreview = null;
   metricsCard.classList.add("hidden");
   detailsCard.classList.add("hidden");
   errorCard.classList.remove("hidden");
@@ -229,7 +197,6 @@ async function requestPreview() {
     }
 
     renderPreview(response);
-    await requestHistory();
   } catch (error) {
     renderError({
       title: "Preview failed",
@@ -283,17 +250,6 @@ async function startDownload() {
   } finally {
     setBusy(false);
   }
-}
-
-async function copySourceUrls() {
-  if (!currentPreview?.items?.length) {
-    setStatus("No URLs available to copy.", true);
-    return;
-  }
-
-  const text = currentPreview.items.map((item) => item.sourceUrl).join("\n");
-  await navigator.clipboard.writeText(text);
-  setStatus("Source URLs copied.");
 }
 
 async function startFullCrawl() {
@@ -373,11 +329,6 @@ async function resetFullCrawl() {
 }
 
 downloadButton.addEventListener("click", startDownload);
-copyButton.addEventListener("click", () => {
-  copySourceUrls().catch((error) => {
-    setStatus(String(error?.message || error), true);
-  });
-});
 refreshButton.addEventListener("click", requestPreview);
 settingsButton.addEventListener("click", () => {
   chrome.runtime.openOptionsPage();
@@ -385,4 +336,10 @@ settingsButton.addEventListener("click", () => {
 crawlButton.addEventListener("click", startFullCrawl);
 resetCrawlButton.addEventListener("click", resetFullCrawl);
 
-requestPreview();
+loadTheme()
+  .catch(() => {
+    applyTheme(DEFAULT_THEME_MODE);
+  })
+  .finally(() => {
+    requestPreview();
+  });
