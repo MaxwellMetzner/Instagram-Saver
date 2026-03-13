@@ -1,21 +1,21 @@
 {
   "manifest_version": 3,
   "name": "Instagram High Quality Saver",
-  "version": "1.1.0",
+  "version": "1.5.0",
+  "description": "Download Instagram posts, reels, stories, and highlights in the highest API-visible quality.",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "description": "Save Instagram post photos/videos in the highest available quality.",
   "permissions": [
     "activeTab",
     "contextMenus",
     "downloads",
     "scripting",
-    "tabs",
-    "webRequest"
+    "storage",
+    "tabs"
   ],
   "host_permissions": [
     "https://*.instagram.com/*",
@@ -26,7 +26,8 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Download media from this Instagram post",
+    "default_title": "Download media from the current Instagram page",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
@@ -34,6 +35,7 @@
       "128": "icons/icon128.png"
     }
   },
+  "options_page": "options.html",
   "content_scripts": [
     {
       "matches": ["https://*.instagram.com/*"],
