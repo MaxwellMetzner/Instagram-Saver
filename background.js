@@ -2,16 +2,17 @@ const MENU_ID_PAGE = "save-instagram-page-media";
 const LOG_PREFIX = "[InstagramSaver]";
 const INSTAGRAM_SHORTCODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const INSTAGRAM_GRAPHQL_DOC_ID = "8845758582119845";
-const INSTAGRAM_PROFILE_QUERY_HASH = "42323d64886122307be10013ad2dcc44";
 const DEFAULT_ACTION_TITLE = "Download media from the current Instagram page";
 const DEFAULT_POPUP_PATH = "popup.html";
 const BADGE_REFRESH_DELAY_MS = 350;
+const PREVIEW_CACHE_TTL_MS = 15000;
 const BADGE_COLORS = {
   working: "#1D4ED8",
   success: "#15803D",
   error: "#B91C1C"
 };
 const badgeRefreshTimers = new Map();
+const previewCache = new Map();
 const DOWNLOAD_HISTORY_LIMIT = 20;
 const DOWNLOADED_MEDIA_KEY_LIMIT = 4000;
 const FULL_PROFILE_CRAWL_POST_BATCH_LIMIT = 48;
@@ -98,6 +99,15 @@ function toErrorDetails(err) {
 
   return {
     message: String(err)
+  };
+}
+
+function summarizeTimelineConnection(connection) {
+  const edges = Array.isArray(connection?.edges) ? connection.edges : [];
+  return {
+    edgeCount: edges.length,
+    hasNextPage: Boolean(connection?.page_info?.has_next_page),
+    hasCursor: Boolean(connection?.page_info?.end_cursor)
   };
 }
 
@@ -436,8 +446,66 @@ function buildProfileBatchDiagnostics(meta) {
   if (Number(meta.filteredItemCount || 0) !== Number(meta.unfilteredItemCount || 0)) {
     diagnostics.push(`Filter kept ${meta.filteredItemCount} of ${meta.unfilteredItemCount} media item${Number(meta.unfilteredItemCount || 0) === 1 ? "" : "s"}.`);
   }
-
   return diagnostics;
+}
+
+function buildPreviewCacheKey(tabUrl, settings) {
+  const keyPayload = {
+    tabUrl,
+    duplicateMode: settings.duplicateMode,
+    saveMetadataSidecar: settings.saveMetadataSidecar,
+    placeMetadataInSubfolder: settings.placeMetadataInSubfolder,
+    exportPostComments: settings.exportPostComments,
+    maxProfilePosts: settings.maxProfilePosts,
+    profileMediaFilter: settings.profileMediaFilter,
+    folderTemplate: settings.folderTemplate,
+    filenameTemplate: settings.filenameTemplate,
+    metadataFilenameTemplate: settings.metadataFilenameTemplate
+  };
+
+  return JSON.stringify(keyPayload);
+}
+
+function getCachedPreview(cacheKey) {
+  const cached = previewCache.get(cacheKey);
+  if (!cached) {
+    return null;
+  }
+
+  if (cached.expiresAt <= Date.now()) {
+    previewCache.delete(cacheKey);
+    return null;
+  }
+
+  return cached.preview;
+}
+
+function setCachedPreview(cacheKey, preview) {
+  previewCache.set(cacheKey, {
+    preview,
+    expiresAt: Date.now() + PREVIEW_CACHE_TTL_MS
+  });
+}
+
+function clearPreviewCacheForUrl(tabUrl) {
+  if (!tabUrl) {
+    previewCache.clear();
+    return;
+  }
+
+  for (const key of previewCache.keys()) {
+    if (key.includes(`"tabUrl":"${tabUrl.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`)) {
+      previewCache.delete(key);
+    }
+  }
+}
+
+function getEasyModeProbeSettings(settings) {
+  return {
+    ...settings,
+    exportPostComments: false,
+    maxProfilePosts: 1
+  };
 }
 
 function getErrorPresentation(err) {
@@ -529,7 +597,8 @@ function getErrorPresentation(err) {
     title: resolved.title,
     message: details.message || defaults.title,
     suggestion: resolved.suggestion,
-    context: details.context || null
+    context: details.context || null,
+    diagnostics: Array.isArray(details.context?.diagnostics) ? details.context.diagnostics : []
   };
 }
 
@@ -625,6 +694,20 @@ function parseInstagramUrl(url) {
   return { kind: "unsupported" };
 }
 
+function getProfilePageFetchUrl(tabUrl, username) {
+  try {
+    const parsed = new URL(tabUrl || `https://www.instagram.com/${username || ""}/`);
+    parsed.hash = "";
+    parsed.search = "";
+    if (username) {
+      parsed.pathname = `/${username.replace(/^\/+|\/+$/g, "")}/`;
+    }
+    return parsed.href;
+  } catch {
+    return `https://www.instagram.com/${String(username || "").replace(/^\/+|\/+$/g, "")}/`;
+  }
+}
+
 async function ensureInstagramSession(tabUrl, pk) {
   if (!pk) return;
 
@@ -642,6 +725,42 @@ async function ensureInstagramSession(tabUrl, pk) {
       pk,
       error: toErrorDetails(err)
     });
+  }
+}
+
+async function fetchTextWithTimeout(url, options = {}, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      credentials: options.credentials || "include"
+    });
+
+    const body = await response.text();
+    if (!response.ok) {
+      throw new InstagramResolverError(
+        `http_${response.status}`,
+        describeHttpFailure(response.status),
+        {
+          status: response.status,
+          url,
+          response: body
+        }
+      );
+    }
+
+    return body;
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new InstagramResolverError("timeout", "Instagram request timed out.", { url, timeoutMs });
+    }
+
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -836,49 +955,315 @@ async function fetchProfileInfo(username, tabUrl) {
     );
   }
 
-  return user;
-}
-
-async function fetchProfileTimelinePage(userId, afterCursor, tabUrl, pageSize = 12) {
-  const graphqlUrl = new URL("https://www.instagram.com/graphql/query/");
-  graphqlUrl.searchParams.set("query_hash", INSTAGRAM_PROFILE_QUERY_HASH);
-  graphqlUrl.searchParams.set("variables", JSON.stringify({
-    id: userId,
-    first: pageSize,
-    after: afterCursor
-  }));
-
-  const data = await fetchJsonWithTimeout(graphqlUrl.href, {
-    headers: getInstagramApiHeaders(tabUrl)
-  });
-
-  const timeline = data?.data?.user?.edge_owner_to_timeline_media || {};
   return {
-    shortcodes: (Array.isArray(timeline.edges) ? timeline.edges : [])
-      .map((edge) => edge?.node?.shortcode)
-      .filter(Boolean),
-    nextCursor: timeline?.page_info?.end_cursor || null,
-    hasNextPage: Boolean(timeline?.page_info?.has_next_page)
+    user,
+    raw: data
   };
 }
 
-function createFullProfileCrawlJob(user, tabUrl, settings) {
-  const timeline = user?.edge_owner_to_timeline_media || {};
-  const pendingShortcodes = (Array.isArray(timeline?.edges) ? timeline.edges : [])
+function getDirectTimelineCandidates(profileInfo) {
+  const user = profileInfo?.user || null;
+  const raw = profileInfo?.raw || null;
+  return [
+    { path: "user.edge_owner_to_timeline_media", connection: user?.edge_owner_to_timeline_media },
+    { path: "user.timeline_media", connection: user?.timeline_media },
+    { path: "user.edge_felix_video_timeline", connection: user?.edge_felix_video_timeline },
+    { path: "user.xdt_api__v1__feed__user_timeline_graphql_connection", connection: user?.xdt_api__v1__feed__user_timeline_graphql_connection },
+    { path: "raw.data.user.edge_owner_to_timeline_media", connection: raw?.data?.user?.edge_owner_to_timeline_media },
+    { path: "raw.data.user.timeline_media", connection: raw?.data?.user?.timeline_media },
+    { path: "raw.data.user.edge_felix_video_timeline", connection: raw?.data?.user?.edge_felix_video_timeline },
+    { path: "raw.data.user.xdt_api__v1__feed__user_timeline_graphql_connection", connection: raw?.data?.user?.xdt_api__v1__feed__user_timeline_graphql_connection },
+    { path: "raw.user.edge_owner_to_timeline_media", connection: raw?.user?.edge_owner_to_timeline_media },
+    { path: "raw.user.timeline_media", connection: raw?.user?.timeline_media },
+    { path: "raw.user.edge_felix_video_timeline", connection: raw?.user?.edge_felix_video_timeline },
+    { path: "raw.user.xdt_api__v1__feed__user_timeline_graphql_connection", connection: raw?.user?.xdt_api__v1__feed__user_timeline_graphql_connection }
+  ].filter((entry) => Boolean(entry.connection));
+}
+
+function extractTimelineMatchFromConnection(connection, path = "timeline") {
+  const shortcodes = (Array.isArray(connection?.edges) ? connection.edges : [])
     .map((edge) => edge?.node?.shortcode)
     .filter(Boolean);
+  const nextCursor = connection?.page_info?.end_cursor || null;
+  const hasNextPage = Boolean(connection?.page_info?.has_next_page);
+
+  if (!shortcodes.length && !nextCursor) {
+    return null;
+  }
 
   return {
-    username: user?.username || "instagram",
-    userId: String(user?.id || user?.pk || "") || null,
+    shortcodes,
+    nextCursor,
+    hasNextPage,
+    path
+  };
+}
+
+function pickTimelineMatch(matches) {
+  if (!matches.length) return null;
+
+  const scoredMatches = matches.map((match) => {
+    const path = String(match.path || "").toLowerCase();
+    const pathScore = path.includes("edge_owner_to_timeline_media")
+      ? 4
+      : path.includes("timeline")
+        ? 2
+        : 0;
+
+    return {
+      ...match,
+      score: match.shortcodes.length * 10 + pathScore + (match.hasNextPage ? 1 : 0)
+    };
+  });
+
+  scoredMatches.sort((left, right) => right.score - left.score);
+  return scoredMatches[0];
+}
+
+function findTimelineMatchInProfileInfo(profileInfo) {
+  const user = profileInfo?.user || null;
+  const username = String(user?.username || "").toLowerCase();
+  const userId = String(user?.id || user?.pk || "");
+  const directCandidates = getDirectTimelineCandidates(profileInfo);
+  const directMatches = directCandidates
+    .map(({ connection, path }) => extractTimelineMatchFromConnection(connection, path))
+    .filter(Boolean);
+
+  if (directMatches.length) {
+    return pickTimelineMatch(directMatches);
+  }
+
+  const root = profileInfo?.raw || user;
+  if (!root || typeof root !== "object") {
+    return null;
+  }
+
+  const matches = [];
+  const visited = new Set();
+
+  function visit(value, path, depth) {
+    if (!value || typeof value !== "object" || depth > 6 || visited.has(value)) {
+      return;
+    }
+
+    visited.add(value);
+
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        visit(value[index], `${path}[${index}]`, depth + 1);
+      }
+      return;
+    }
+
+    const connectionMatch = extractTimelineMatchFromConnection(value, path);
+    if (connectionMatch) {
+      const edges = Array.isArray(value.edges) ? value.edges : [];
+      const belongsToUser = edges.some((edge) => {
+        const owner = edge?.node?.owner;
+        const ownerUsername = String(owner?.username || "").toLowerCase();
+        const ownerId = String(owner?.id || owner?.pk || "");
+        return (username && ownerUsername === username) || (userId && ownerId === userId);
+      });
+      const pathText = String(path || "").toLowerCase();
+      if (belongsToUser || pathText.includes("timeline") || pathText.includes("edge_owner")) {
+        matches.push(connectionMatch);
+      }
+    }
+
+    for (const [key, nestedValue] of Object.entries(value)) {
+      visit(nestedValue, path ? `${path}.${key}` : key, depth + 1);
+    }
+  }
+
+  visit(root, "root", 0);
+  return pickTimelineMatch(matches);
+}
+
+function extractShortcodeFromProfileFeedItem(item) {
+  const queue = [item];
+  const visited = new Set();
+
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object" || visited.has(current)) {
+      continue;
+    }
+
+    visited.add(current);
+
+    if (typeof current.code === "string" && current.code) {
+      return current.code;
+    }
+
+    if (typeof current.shortcode === "string" && current.shortcode) {
+      return current.shortcode;
+    }
+
+    queue.push(current.media_or_ad, current.media, current.node);
+  }
+
+  return null;
+}
+
+function extractShortcodesFromProfileFeedResponse(data) {
+  const entries = [
+    ...(Array.isArray(data?.items) ? data.items : []),
+    ...(Array.isArray(data?.profile_grid_items) ? data.profile_grid_items : [])
+  ];
+
+  return uniqBy(
+    entries.map((entry) => extractShortcodeFromProfileFeedItem(entry)).filter(Boolean),
+    (shortcode) => shortcode
+  );
+}
+
+function extractShortcodesFromHtml(html) {
+  if (!html) return [];
+
+  const patterns = [
+    /"shortcode":"([A-Za-z0-9_-]{5,})"/g,
+    /\/(?:p|reel|reels)\/([A-Za-z0-9_-]{5,})/g
+  ];
+
+  const shortcodes = [];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(html)) !== null) {
+      shortcodes.push(match[1]);
+    }
+  }
+
+  return Array.from(new Set(shortcodes));
+}
+
+async function fetchProfilePageShortcodes(tabUrl, username, requestedCount) {
+  const pageUrl = getProfilePageFetchUrl(tabUrl, username);
+  const html = await fetchTextWithTimeout(pageUrl, {
+    headers: {
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      Referer: pageUrl
+    }
+  }, 12000);
+
+  const shortcodes = extractShortcodesFromHtml(html).slice(0, Math.max(1, requestedCount || 12));
+  return {
+    shortcodes,
+    nextCursor: null,
+    hasNextPage: false,
+    source: "profile_html"
+  };
+}
+
+async function fetchProfileTimelinePage(userId, afterCursor, tabUrl, pageSize = 12) {
+  const feedUrl = new URL(`https://i.instagram.com/api/v1/feed/user/${encodeURIComponent(userId)}/`);
+  feedUrl.searchParams.set("count", String(pageSize));
+  if (afterCursor) {
+    feedUrl.searchParams.set("max_id", afterCursor);
+  }
+
+  const data = await fetchJsonWithTimeout(feedUrl.href, {
+    headers: getInstagramApiHeaders(tabUrl)
+  });
+
+  const shortcodes = extractShortcodesFromProfileFeedResponse(data);
+  const nextCursor = data?.next_max_id || data?.profile_grid_items_cursor || null;
+  const hasNextPage = Boolean(data?.more_available || nextCursor);
+  return {
+    shortcodes,
+    nextCursor,
+    hasNextPage
+  };
+}
+
+async function getInitialProfileTimeline(profileInfo, tabUrl, requestedCount) {
+  const normalizedProfileInfo = profileInfo?.user
+    ? profileInfo
+    : { user: profileInfo, raw: profileInfo };
+  const user = normalizedProfileInfo.user;
+  const extractedTimeline = findTimelineMatchInProfileInfo(normalizedProfileInfo);
+
+  if (extractedTimeline) {
+    return {
+      shortcodes: extractedTimeline.shortcodes,
+      nextCursor: extractedTimeline.nextCursor,
+      hasNextPage: extractedTimeline.hasNextPage,
+      source: "web_profile_info"
+    };
+  }
+
+  const userId = String(user?.id || user?.pk || "") || null;
+  if (!userId) {
+    try {
+      const htmlFallbackTimeline = await fetchProfilePageShortcodes(tabUrl, user?.username, requestedCount);
+      if (htmlFallbackTimeline.shortcodes.length > 0) {
+        return htmlFallbackTimeline;
+      }
+    } catch (htmlErr) {
+      logWarn("profile_initial_html_fallback_failed", {
+        username: user?.username || null,
+        error: toErrorDetails(htmlErr)
+      });
+    }
+    return {
+      shortcodes: [],
+      nextCursor: null,
+      hasNextPage: false,
+      source: "web_profile_info"
+    };
+  }
+
+  try {
+    const fallbackTimeline = await fetchProfileTimelinePage(
+      userId,
+      null,
+      tabUrl,
+      Math.min(12, Math.max(1, requestedCount || 12))
+    );
+    return {
+      ...fallbackTimeline,
+      source: "profile_feed_first_page"
+    };
+  } catch (err) {
+    logWarn("profile_initial_timeline_fallback_failed", {
+      userId,
+      error: toErrorDetails(err)
+    });
+    try {
+      const htmlFallbackTimeline = await fetchProfilePageShortcodes(tabUrl, user?.username, requestedCount);
+      if (htmlFallbackTimeline.shortcodes.length > 0) {
+        return htmlFallbackTimeline;
+      }
+    } catch (htmlErr) {
+      logWarn("profile_initial_html_fallback_failed", {
+        username: user?.username || null,
+        error: toErrorDetails(htmlErr)
+      });
+    }
+    return {
+      shortcodes: [],
+      nextCursor: null,
+      hasNextPage: false,
+      source: "web_profile_info"
+    };
+  }
+}
+
+async function createFullProfileCrawlJob(user, tabUrl, settings) {
+  const initialTimeline = await getInitialProfileTimeline(user, tabUrl, FULL_PROFILE_CRAWL_POST_BATCH_LIMIT);
+  const profileUser = user?.user || user;
+  const pendingShortcodes = initialTimeline.shortcodes;
+
+  return {
+    username: profileUser?.username || "instagram",
+    userId: String(profileUser?.id || profileUser?.pk || "") || null,
     pageUrl: tabUrl,
-    title: user?.full_name ? `${user.full_name} (@${user.username})` : `@${user?.username || "instagram"}`,
+    title: profileUser?.full_name ? `${profileUser.full_name} (@${profileUser.username})` : `@${profileUser?.username || "instagram"}`,
     status: "paused",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     completedAt: null,
-    hasMore: Boolean(timeline?.page_info?.has_next_page && timeline?.page_info?.end_cursor),
-    nextCursor: timeline?.page_info?.end_cursor || null,
+    hasMore: Boolean(initialTimeline.hasNextPage && initialTimeline.nextCursor),
+    nextCursor: initialTimeline.nextCursor || null,
     pendingShortcodes,
     profileMediaFilter: settings.profileMediaFilter,
     duplicateMode: settings.duplicateMode,
@@ -947,37 +1332,26 @@ async function fetchAdditionalProfileShortcodes(userId, afterCursor, tabUrl, rem
     iterations += 1;
     diagnostics.pagesFetched = iterations;
     try {
-      const graphqlUrl = new URL("https://www.instagram.com/graphql/query/");
-      graphqlUrl.searchParams.set("query_hash", INSTAGRAM_PROFILE_QUERY_HASH);
-      graphqlUrl.searchParams.set("variables", JSON.stringify({
-        id: userId,
-        first: Math.min(12, remainingLimit - shortcodes.length),
-        after: cursor
-      }));
-
-      const data = await fetchJsonWithTimeout(graphqlUrl.href, {
-        headers: getInstagramApiHeaders(tabUrl)
-      });
-
-      const timeline = data?.data?.user?.edge_owner_to_timeline_media;
-      const edges = Array.isArray(timeline?.edges) ? timeline.edges : [];
-      shortcodes.push(
-        ...edges
-          .map((edge) => edge?.node?.shortcode)
-          .filter(Boolean)
+      const page = await fetchProfileTimelinePage(
+        userId,
+        cursor,
+        tabUrl,
+        Math.min(12, remainingLimit - shortcodes.length)
       );
+
+      shortcodes.push(...page.shortcodes);
 
       if (shortcodes.length >= remainingLimit) {
         diagnostics.stopReason = "requested_limit_reached";
         break;
       }
 
-      if (!timeline?.page_info?.has_next_page) {
+      if (!page.hasNextPage) {
         diagnostics.stopReason = "instagram_reported_end";
         break;
       }
 
-      cursor = timeline?.page_info?.end_cursor || null;
+      cursor = page.nextCursor || null;
       if (!cursor) {
         diagnostics.stopReason = "missing_end_cursor";
         break;
@@ -1004,11 +1378,10 @@ async function fetchAdditionalProfileShortcodes(userId, afterCursor, tabUrl, rem
 }
 
 async function resolveProfilePlan(tabUrl, descriptor, settings, progressCallback = null) {
-  const user = await fetchProfileInfo(descriptor.username, tabUrl);
-  const timeline = user?.edge_owner_to_timeline_media || {};
-  const initialShortcodes = (Array.isArray(timeline?.edges) ? timeline.edges : [])
-    .map((edge) => edge?.node?.shortcode)
-    .filter(Boolean);
+  const profileInfo = await fetchProfileInfo(descriptor.username, tabUrl);
+  const user = profileInfo.user;
+  const initialTimeline = await getInitialProfileTimeline(profileInfo, tabUrl, settings.maxProfilePosts);
+  const initialShortcodes = initialTimeline.shortcodes;
   let shortcodes = [...initialShortcodes];
   let pagination = {
     initialCount: initialShortcodes.length,
@@ -1016,19 +1389,20 @@ async function resolveProfilePlan(tabUrl, descriptor, settings, progressCallback
     pagesFetched: 0,
     stopReason: initialShortcodes.length >= settings.maxProfilePosts
       ? "initial_page_sufficient"
-      : timeline?.page_info?.has_next_page
-        ? user?.id
+      : initialTimeline.hasNextPage
+        ? (user?.id || user?.pk)
           ? null
           : "profile_id_missing"
         : "initial_page_only",
-    error: null
+    error: null,
+    source: initialTimeline.source
   };
 
   const remaining = Math.max(0, settings.maxProfilePosts - shortcodes.length);
-  if (remaining > 0 && timeline?.page_info?.has_next_page && timeline?.page_info?.end_cursor && user?.id) {
+  if (remaining > 0 && initialTimeline.hasNextPage && initialTimeline.nextCursor && (user?.id || user?.pk)) {
     const additional = await fetchAdditionalProfileShortcodes(
-      String(user.id),
-      timeline.page_info.end_cursor,
+      String(user.id || user.pk),
+      initialTimeline.nextCursor,
       tabUrl,
       remaining
     );
@@ -1040,7 +1414,7 @@ async function resolveProfilePlan(tabUrl, descriptor, settings, progressCallback
       stopReason: additional.diagnostics.stopReason,
       error: additional.diagnostics.error
     };
-  } else if (remaining > 0 && timeline?.page_info?.has_next_page && !timeline?.page_info?.end_cursor) {
+  } else if (remaining > 0 && initialTimeline.hasNextPage && !initialTimeline.nextCursor) {
     pagination = {
       ...pagination,
       stopReason: "no_profile_cursor"
@@ -1101,7 +1475,10 @@ async function resolveProfilePlan(tabUrl, descriptor, settings, progressCallback
     throw new InstagramResolverError(
       "profile_posts_unavailable",
       "The profile was found, but none of its posts could be resolved into downloadable media.",
-      { username: descriptor.username, failedPosts }
+      {
+        username: descriptor.username,
+        failedPosts
+      }
     );
   }
 
@@ -1110,7 +1487,10 @@ async function resolveProfilePlan(tabUrl, descriptor, settings, progressCallback
     throw new InstagramResolverError(
       "profile_filter_empty",
       `The profile returned media, but none matched the selected profile filter: ${formatProfileMediaFilterLabel(settings.profileMediaFilter)}.`,
-      { username: descriptor.username, profileMediaFilter: settings.profileMediaFilter }
+      {
+        username: descriptor.username,
+        profileMediaFilter: settings.profileMediaFilter
+      }
     );
   }
 
@@ -1774,15 +2154,12 @@ async function updateAvailabilityBadge(tab) {
   }
 
   try {
-    const plan = await resolveDownloadPlan(tabUrl);
-    const summary = buildSummary(plan);
-    const badgeText = summary.totalCount > 99 ? "99+" : String(summary.totalCount || 0);
-    const noun = summary.totalCount === 1 ? "file" : "files";
+    await resolveDownloadPlan(tabUrl, getEasyModeProbeSettings(settings));
     await setBadge(
       tabId,
-      badgeText,
+      "OK",
       BADGE_COLORS.success,
-      `${summary.totalCount} ${noun} ready from @${summary.username || "instagram"}`
+      "This Instagram page is ready to download"
     );
   } catch (err) {
     const presentation = getErrorPresentation(err);
@@ -1948,6 +2325,17 @@ async function getPagePreview(tab) {
   }
 
   const settings = await getSettings();
+  const cacheKey = buildPreviewCacheKey(tabUrl, settings);
+  const cachedPreview = getCachedPreview(cacheKey);
+  if (cachedPreview) {
+    return {
+      ...cachedPreview,
+      crawlJob: cachedPreview.summary.pageKind === "profile"
+        ? summarizeCrawlJob(await getCrawlJob(cachedPreview.meta.username || cachedPreview.summary.username))
+        : null
+    };
+  }
+
   const resolvedPlan = await resolveDownloadPlan(tabUrl, settings);
   const diagnosticPlan = {
     ...resolvedPlan,
@@ -1962,6 +2350,7 @@ async function getPagePreview(tab) {
   if (plan.meta.pageKind === "profile") {
     preview.crawlJob = summarizeCrawlJob(await getCrawlJob(plan.meta.username));
   }
+  setCachedPreview(cacheKey, preview);
   return preview;
 }
 
@@ -2056,8 +2445,8 @@ async function runFullProfileCrawl(tab) {
   let crawlJob = await getCrawlJob(descriptor.username);
 
   if (!crawlJob || crawlJob.status === "completed") {
-    const user = await fetchProfileInfo(descriptor.username, tabUrl);
-    crawlJob = createFullProfileCrawlJob(user, tabUrl, settings);
+    const profileInfo = await fetchProfileInfo(descriptor.username, tabUrl);
+    crawlJob = await createFullProfileCrawlJob(profileInfo, tabUrl, settings);
   }
 
   crawlJob = {
@@ -2280,6 +2669,7 @@ async function runDownloadFlow(tab, mode) {
 
   try {
     const settings = await getSettings();
+    clearPreviewCacheForUrl(tabUrl);
     await setBadge(tabId, "...", BADGE_COLORS.working, "Resolving Instagram media...");
     await sendToast(tabId, "Resolving Instagram media via the authenticated API...", "info");
 
@@ -2419,6 +2809,8 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "sync") {
     return;
   }
+
+  previewCache.clear();
 
   if (changes.easyMode) {
     syncActionPresentation().catch((err) => {
