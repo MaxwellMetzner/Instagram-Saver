@@ -4,13 +4,6 @@ An API-first Chrome extension for downloading Instagram media from the current p
 
 ## Current Direction
 
-This project now follows the same general strategy that makes yt-dlp robust on Instagram:
-
-- Resolve content from stable Instagram identifiers in the URL.
-- Use authenticated Instagram API responses as the primary source of truth.
-- Avoid DOM scraping as a core extraction strategy.
-- Keep the content script focused on user-facing UI only.
-
 The extension currently supports:
 
 - Posts and reels via shortcode-based API resolution.
@@ -110,5 +103,3 @@ Within a single download batch, the extension now makes planned filenames collis
 - Update the source files.
 - Reload the unpacked extension in `chrome://extensions`.
 - Test against real Instagram pages while logged in.
-
-See `ROADMAP.md` for the implementation plan.

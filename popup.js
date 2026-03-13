@@ -19,10 +19,10 @@ const errorSuggestionEl = document.getElementById("error-suggestion");
 const downloadButton = document.getElementById("download-button");
 const refreshButton = document.getElementById("refresh-button");
 const settingsButton = document.getElementById("settings-button");
-const crawlActionsCard = document.getElementById("crawl-actions-card");
 const crawlButton = document.getElementById("crawl-button");
 const resetCrawlButton = document.getElementById("reset-crawl-button");
 const crawlSummaryEl = document.getElementById("crawl-summary");
+const crawlStatusActionsEl = document.getElementById("crawl-status-actions");
 const crawlDiagnosticsBlock = document.getElementById("crawl-diagnostics-block");
 const crawlDiagnosticsListEl = document.getElementById("crawl-diagnostics-list");
 const statusEl = document.getElementById("status");
@@ -52,30 +52,41 @@ function setBusy(isBusy) {
   resetCrawlButton.disabled = isBusy;
 }
 
+function setElementText(element, text) {
+  const value = String(text || "").trim();
+  element.textContent = value;
+  element.classList.toggle("hidden", !value);
+}
+
+function isDuplicateErrorText(candidate, seenValues) {
+  const normalized = String(candidate || "").trim().toLowerCase();
+  return !normalized || seenValues.has(normalized);
+}
+
 function renderCrawlJob(preview) {
   const crawlJob = preview?.crawlJob || null;
   const isProfile = preview?.summary?.pageKind === "profile";
 
+  crawlButton.classList.toggle("hidden", !isProfile);
+
   if (!isProfile) {
-    crawlActionsCard.classList.add("hidden");
     crawlSummaryEl.classList.add("hidden");
+    crawlStatusActionsEl.classList.add("hidden");
     crawlDiagnosticsBlock.classList.add("hidden");
     return;
   }
 
-  crawlActionsCard.classList.remove("hidden");
-  crawlSummaryEl.classList.remove("hidden");
-
   if (!crawlJob) {
     crawlButton.textContent = "Start Full Crawl";
-    resetCrawlButton.classList.add("hidden");
-    crawlSummaryEl.textContent = "No full crawl job yet. Start one to checkpoint pagination and continue in batches.";
+    crawlSummaryEl.classList.add("hidden");
+    crawlStatusActionsEl.classList.add("hidden");
     crawlDiagnosticsBlock.classList.add("hidden");
     return;
   }
 
   crawlButton.textContent = crawlJob.status === "completed" ? "Start New Crawl" : "Resume Full Crawl";
-  resetCrawlButton.classList.remove("hidden");
+  crawlStatusActionsEl.classList.remove("hidden");
+  crawlSummaryEl.classList.remove("hidden");
   crawlSummaryEl.textContent = crawlJob.statusLine;
 
   crawlDiagnosticsListEl.replaceChildren();
@@ -161,18 +172,34 @@ function renderPreview(preview) {
 function renderError(error) {
   metricsCard.classList.add("hidden");
   detailsCard.classList.add("hidden");
-  errorCard.classList.remove("hidden");
+  const isUnsupportedPage = error?.code === "unsupported_url";
+  errorCard.classList.toggle("hidden", isUnsupportedPage);
 
   pageKindPill.textContent = "ERROR";
   headlineEl.textContent = "The current page could not be resolved.";
-  errorTitleEl.textContent = error?.title || "Download failed";
-  errorMessageEl.textContent = error?.message || "Unknown error.";
-  errorSuggestionEl.textContent = error?.suggestion || "Try reloading the page and checking your Instagram session.";
+  const fallbackTitle = error?.title || "Download failed";
+  const seenValues = new Set();
+  setElementText(errorTitleEl, fallbackTitle);
+  seenValues.add(fallbackTitle.trim().toLowerCase());
+
+  const nextMessage = isDuplicateErrorText(error?.message, seenValues) ? "" : error?.message;
+  if (nextMessage) {
+    seenValues.add(nextMessage.trim().toLowerCase());
+  }
+
+  const resolvedSuggestion = error?.suggestion || "Try reloading the page and checking your Instagram session.";
+  const nextSuggestion = isDuplicateErrorText(resolvedSuggestion, seenValues)
+    ? ""
+    : resolvedSuggestion;
+
+  setElementText(errorMessageEl, nextMessage);
+  setElementText(errorSuggestionEl, nextSuggestion);
   batchDiagnosticsBlock.classList.add("hidden");
-  crawlActionsCard.classList.add("hidden");
+  crawlButton.classList.add("hidden");
   crawlSummaryEl.classList.add("hidden");
+  crawlStatusActionsEl.classList.add("hidden");
   crawlDiagnosticsBlock.classList.add("hidden");
-  setStatus(error?.title || "Could not resolve page.", true);
+  setStatus(fallbackTitle, true);
 }
 
 async function requestPreview() {

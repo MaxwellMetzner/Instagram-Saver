@@ -256,6 +256,10 @@
         word-break: break-word;
       }
 
+      .value + .value {
+        margin-top: 8px;
+      }
+
       .metrics {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
@@ -302,12 +306,6 @@
       }
 
       .actions {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-      }
-
-      .crawl-actions {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 10px;
@@ -403,6 +401,15 @@
         gap: 8px;
       }
 
+      .status-actions {
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      .status-actions button {
+        min-width: 0;
+      }
+
       .status-heading {
         margin: 0;
         font-size: 0.72rem;
@@ -441,21 +448,20 @@
         </section>
 
         <div class="stack">
-          <section class="surface actions">
+          <section class="surface actions" id="action-card">
             <button class="primary" id="download-button" type="button">Download</button>
             <button class="ghost" id="refresh-button" type="button">Refresh</button>
             <button class="ghost" id="settings-button" type="button">Settings</button>
-          </section>
-
-          <section class="surface crawl-actions hidden" id="crawl-actions-card">
-            <button class="secondary" id="crawl-button" type="button">Start Full Crawl</button>
-            <button class="ghost" id="reset-crawl-button" type="button">Reset Crawl</button>
+            <button class="secondary hidden" id="crawl-button" type="button">Start Full Crawl</button>
           </section>
 
           <section class="surface status-surface">
             <p class="status-heading">Status</p>
             <p class="crawl-summary hidden" id="crawl-summary"></p>
             <p class="status" id="status"></p>
+            <div class="status-actions hidden" id="crawl-status-actions">
+              <button class="ghost" id="reset-crawl-button" type="button">Reset Crawl</button>
+            </div>
           </section>
         </div>
 
@@ -518,8 +524,8 @@
           <section class="details-panel hidden" id="error-card">
             <p class="label">Why It Failed</p>
             <p class="value error" id="error-title"></p>
-            <p class="value" id="error-message" style="margin-top: 8px;"></p>
-            <p class="value" id="error-suggestion" style="margin-top: 8px;"></p>
+            <p class="value hidden" id="error-message"></p>
+            <p class="value hidden" id="error-suggestion"></p>
           </section>
         </div>
       </section>
