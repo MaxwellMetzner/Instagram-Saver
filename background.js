@@ -2122,6 +2122,36 @@ async function setBadge(tabId, text, color, title) {
   }
 }
 
+async function syncActionAvailability(tab, settings = null) {
+  const tabId = tab?.id;
+  if (!tabId) {
+    return false;
+  }
+
+  const tabUrl = tab?.url || "";
+  const isSupportedTab = isInstagramUrl(tabUrl);
+
+  try {
+    if (!isSupportedTab) {
+      await chrome.action.disable(tabId);
+      await clearBadge(tabId, "Open an Instagram page to use this extension");
+      return false;
+    }
+
+    await chrome.action.enable(tabId);
+    if (!(settings || await getSettings()).easyMode) {
+      await clearBadge(tabId);
+    }
+    return true;
+  } catch (err) {
+    logWarn("action_availability_sync_failed", {
+      tabId,
+      error: toErrorDetails(err)
+    });
+    return isSupportedTab;
+  }
+}
+
 async function syncActionPresentation(settings = null) {
   const resolvedSettings = settings || await getSettings();
   await chrome.action.setPopup({
@@ -2130,6 +2160,7 @@ async function syncActionPresentation(settings = null) {
 
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (activeTab?.id) {
+    await syncActionAvailability(activeTab, resolvedSettings);
     scheduleAvailabilityBadgeRefresh(activeTab);
   }
 }
@@ -2140,6 +2171,11 @@ async function updateAvailabilityBadge(tab) {
   const tabUrl = tab?.url || "";
 
   if (!tabId) {
+    return;
+  }
+
+  const actionEnabled = await syncActionAvailability(tab, settings);
+  if (!actionEnabled) {
     return;
   }
 

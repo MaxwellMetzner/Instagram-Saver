@@ -1,22 +1,14 @@
 # Instagram Saver
 
-An API-first Chrome extension for downloading Instagram media from the current page.
+Instagram Saver is a Chrome extension for downloading media from Instagram pages you can already view in your browser session. It supports posts, reels, stories, highlights, and profile-page batches, and it prefers Instagram's own API-visible media instead of scraping the page UI.
 
-## Current Direction
+## What It Does
 
-The extension currently supports:
-
-- Posts and reels via shortcode-based API resolution.
-- Stories and highlights via Instagram reels APIs.
-- Profile-page batch downloads using Instagram profile APIs and per-post resolution.
-- Profile pagination diagnostics and progress reporting during larger profile batches.
-- Resumable full profile crawl jobs with saved cursors for large profiles.
-- Optional easy-click mode for one-click downloads from the toolbar.
-- Metadata sidecar export as JSON.
-- Optional batch report JSON export.
-- Configurable download naming and folder templates.
-- A compact popup with download, refresh, settings, and crawl controls plus collapsible diagnostics.
-- Duplicate controls plus local download-history export/reset from the settings page.
+- Downloads media from the current Instagram post, reel, story, or highlight page
+- Supports profile-page batch downloads and resumable full-profile crawls
+- Uses your logged-in Instagram session, so private or restricted content still follows normal Instagram access rules
+- Can export optional JSON metadata and batch reports alongside downloads
+- Lets you customize folders, filenames, duplicate handling, and download prompts
 
 ## Installation
 
@@ -27,79 +19,53 @@ The extension currently supports:
 
 ## Usage
 
-1. Open an Instagram post, reel, story, or highlight.
-2. Click the extension action to open the popup, inspect the resolved media, and start the download.
-3. Confirm the download if confirmation is enabled.
+1. Open an Instagram page for a post, reel, story, highlight, or profile.
+2. Click the extension icon to open the popup.
+3. Start the download from the popup, or use the Instagram page context menu for a direct download.
 
-You can also use the page context menu for a direct page-level download.
-
-On profile pages, the popup can also start or resume a full profile crawl. Full crawls are checkpointed in extension storage, so you can continue them later instead of relying on one long-running session.
-
-The extension uses your existing logged-in Instagram browser session. If the content is not visible to your account, the extension cannot download it.
+On profile pages, the popup can also start or resume a larger crawl. Crawl progress and cursors are saved in extension storage so long runs can be resumed later.
 
 ## Settings
 
-The options page lets you configure:
+The options page includes:
 
-- Theme mode for the extension popup and settings page
-- Easy mode for direct left-click downloads with availability badges
+- Light, dark, or themed UI modes
+- Easy-click download mode
 - Confirmation before download
 - Metadata sidecar export
 - Batch report export
-- Optional metadata subfolder placement
-- Optional current-post comment export in metadata
-- Prompting for single-file downloads
-- Duplicate handling mode
-- Maximum posts to resolve when downloading from a profile page
-- Profile media filter for profile-page downloads
-- Folder naming template
-- Media filename template
-- Metadata filename template
+- Duplicate handling controls
+- Profile media filters and per-profile post limits
+- Folder, media filename, and metadata filename templates
+- Download history export and reset
 
-It also lets you export or clear the local download history used for duplicate suppression.
+Available template tokens are `{username}`, `{id}`, `{kind}`, `{type}`, `{index}`, and `{date}`.
 
-## Metadata Export
+## Metadata
 
-When enabled, each download operation also writes a JSON sidecar file containing:
+When metadata export is enabled, the extension writes a JSON sidecar file with available details such as username, identifiers, caption text, timestamps, media URLs, dimensions, and output filenames. If batch report export is enabled, it also writes a report covering skipped files, failures, and profile pagination diagnostics.
 
-- Username and owner identifiers
-- Caption and timestamps when available
-- Post/story type and extraction source
-- Per-item URLs, dimensions, and output filenames
-
-The metadata file is optional. It is useful when you want to:
-
-- Keep provenance for archived downloads
-- Reconstruct original source URLs later
-- Inspect which API endpoint resolved the media
-- Feed the download set into another script or organizer
-
-If you only care about the media files themselves, you can disable sidecar export in the options page.
-
-If batch report export is enabled, the extension also writes a small JSON report describing skipped files, failed files, and profile pagination diagnostics for that run.
-
-Template tokens are available in all three template fields: folder, media filename, and metadata filename. The available tokens are `{username}`, `{id}`, `{kind}`, `{type}`, `{index}`, and `{date}`.
-
-Within a single download batch, the extension now makes planned filenames collision-safe automatically. If two different media items would otherwise resolve to the same relative path, the extension appends a suffix so the files remain distinct. If a file with the same path already exists on disk from an earlier run, Chrome's download system still controls the final on-disk rename behavior.
+Within a single batch, planned filenames are made collision-safe automatically. If the same path already exists from an earlier run, Chrome still decides the final on-disk rename behavior.
 
 ## Permissions
 
-- `activeTab`: lets the action run against the current Instagram tab.
-- `contextMenus`: adds a page-level download menu on Instagram.
-- `downloads`: queues file downloads.
-- `scripting`: injects the UI content script when needed.
-- `storage`: persists extension settings.
-- `tabs`: reads the active tab for popup previews and easy-mode availability badges.
+- `contextMenus` to add a page-level download action
+- `downloads` to queue downloads
+- `scripting` to inject the content script when needed
+- `storage` to persist settings and crawl checkpoints
+- `tabs` to read the active tab for popup state and availability badges
+- Host access is limited to `instagram.com` and its subdomains.
+- The toolbar action is disabled on non-Instagram pages.
 
 ## Limitations
 
-- The extension does not bypass Instagram privacy, follow, or login requirements.
-- It does not assemble DASH/HLS streams or perform ffmpeg-style muxing.
-- Profile downloads and full crawls are still best-effort and depend on Instagram's current API responses, cursors, and rate limits.
+- The extension does not bypass Instagram login, privacy, or follow restrictions.
+- It does not assemble DASH or HLS streams or do ffmpeg-style muxing.
+- Profile downloads and full crawls are best-effort and depend on Instagram's current APIs, cursors, and rate limits.
 - It does not crawl hashtags in the background.
 
 ## Development
 
-- Update the source files.
-- Reload the unpacked extension in `chrome://extensions`.
-- Test against real Instagram pages while logged in.
+1. Update the source files.
+2. Reload the unpacked extension in `chrome://extensions`.
+3. Test against real Instagram pages while logged in.

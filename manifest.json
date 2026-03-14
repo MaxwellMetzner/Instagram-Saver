@@ -10,7 +10,6 @@
     "128": "icons/icon128.png"
   },
   "permissions": [
-    "activeTab",
     "contextMenus",
     "downloads",
     "scripting",
@@ -18,14 +17,14 @@
     "tabs"
   ],
   "host_permissions": [
-    "https://*.instagram.com/*",
-    "https://*.cdninstagram.com/*",
-    "https://*.fbcdn.net/*"
+    "https://instagram.com/*",
+    "https://*.instagram.com/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
+    "default_state": "disabled",
     "default_title": "Download media from the current Instagram page",
     "default_popup": "popup.html",
     "default_icon": {
@@ -38,7 +37,7 @@
   "options_page": "options.html",
   "content_scripts": [
     {
-      "matches": ["https://*.instagram.com/*"],
+      "matches": ["https://instagram.com/*", "https://*.instagram.com/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
