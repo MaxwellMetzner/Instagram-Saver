@@ -95,6 +95,7 @@
         border-radius: 28px;
         box-shadow: var(--shadow);
         padding: 18px;
+        -webkit-backdrop-filter: blur(12px);
         backdrop-filter: blur(12px);
         overflow: hidden;
       }
@@ -449,10 +450,10 @@
 
         <div class="stack">
           <section class="surface actions" id="action-card">
-            <button class="primary" id="download-button" type="button">Download</button>
+            <button class="primary" id="download-button" type="button" title="Download the media resolved for the current Instagram page.">Download</button>
             <button class="ghost" id="refresh-button" type="button">Refresh</button>
             <button class="ghost" id="settings-button" type="button">Settings</button>
-            <button class="secondary hidden" id="crawl-button" type="button">Start Full Crawl</button>
+            <button class="secondary hidden" id="crawl-button" type="button" title="Walk the entire profile in resumable batches beyond the normal Download preview.">Start Full Crawl</button>
           </section>
 
           <section class="surface status-surface">

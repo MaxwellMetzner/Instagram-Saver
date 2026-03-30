@@ -58,6 +58,46 @@ function setElementText(element, text) {
   element.classList.toggle("hidden", !value);
 }
 
+function formatProfileMediaFilterText(profileMediaFilter) {
+  if (profileMediaFilter === "images") return "images only";
+  if (profileMediaFilter === "videos") return "videos only";
+  return "all media";
+}
+
+function updateActionTooltips(preview = null) {
+  const summary = preview?.summary || null;
+  const crawlJob = preview?.crawlJob || null;
+
+  if (summary?.pageKind === "profile") {
+    const maxProfilePosts = Math.max(1, Number(summary?.maxProfilePosts || 0)) || 1;
+    const profileMediaFilter = formatProfileMediaFilterText(summary?.profileMediaFilter || crawlJob?.profileMediaFilter || "all");
+    const postLabel = maxProfilePosts === 1 ? "post" : "posts";
+
+    downloadButton.title = `Downloads only the current profile preview: up to ${maxProfilePosts} ${postLabel} using ${profileMediaFilter}. This is a one-time batch and does not continue into older posts.`;
+
+    if (!crawlJob) {
+      crawlButton.title = "Starts a full-profile crawl that keeps paging into older posts automatically. It saves a checkpoint only if the crawl is interrupted or Instagram rate limits the session.";
+      return;
+    }
+
+    if (crawlJob.status === "completed") {
+      crawlButton.title = "Starts a fresh full-profile crawl from the beginning. It will keep paging automatically until the profile ends or Instagram rate limits the session.";
+      return;
+    }
+
+    if (crawlJob.status === "rate_limited") {
+      crawlButton.title = "Resumes the saved full-profile crawl from the last checkpoint after Instagram rate limited the session.";
+      return;
+    }
+
+    crawlButton.title = "Resumes the saved full-profile crawl from the last checkpoint. It keeps paging automatically until the profile ends or Instagram rate limits the session.";
+    return;
+  }
+
+  downloadButton.title = "Download the media resolved for the current Instagram page.";
+  crawlButton.title = "Attempt the full profile in one run, saving progress if the crawl is interrupted or rate limited.";
+}
+
 function isDuplicateErrorText(candidate, seenValues) {
   const normalized = String(candidate || "").trim().toLowerCase();
   return !normalized || seenValues.has(normalized);
@@ -90,11 +130,18 @@ function renderCrawlJob(preview) {
   crawlSummaryEl.textContent = crawlJob.statusLine;
 
   crawlDiagnosticsListEl.replaceChildren();
+  const checkpointLine = crawlJob.status === "rate_limited"
+    ? "Instagram rate limited the last crawl attempt. Resume later from the saved checkpoint."
+    : crawlJob.lastBatch?.stopReason === "cancelled_before_download"
+      ? "The current crawl batch is preserved and can be resumed from the saved checkpoint."
+      : crawlJob.hasMore
+        ? "More profile pages remain after the saved cursor."
+        : "Saved cursor is at the end of the profile.";
   const diagnostics = [
     `Status: ${crawlJob.status}.`,
     `Posts processed: ${crawlJob.totalPostsResolved}.`,
     `Pending saved shortcodes: ${crawlJob.pendingShortcodes}.`,
-    crawlJob.hasMore ? "More profile pages remain after the saved cursor." : "Saved cursor is at the end of the profile.",
+    checkpointLine,
     crawlJob.lastBatch
       ? `Last batch processed ${crawlJob.lastBatch.processedPosts} posts and queued ${crawlJob.lastBatch.queued} file${crawlJob.lastBatch.queued === 1 ? "" : "s"}.`
       : "No crawl batches have been processed yet."
@@ -165,6 +212,7 @@ function renderPreview(preview) {
   }
 
   renderCrawlJob(preview);
+  updateActionTooltips(preview);
 
   setStatus("Ready.");
 }
@@ -199,6 +247,7 @@ function renderError(error) {
   crawlSummaryEl.classList.add("hidden");
   crawlStatusActionsEl.classList.add("hidden");
   crawlDiagnosticsBlock.classList.add("hidden");
+  updateActionTooltips();
   setStatus(fallbackTitle, true);
 }
 
@@ -296,13 +345,19 @@ async function startFullCrawl() {
     });
 
     if (response?.ok) {
-      setStatus(response?.crawlJob?.hasMore ? "Crawl batch finished. Resume to continue." : "Full crawl completed.");
+      if (response?.rateLimited || response?.crawlJob?.status === "rate_limited") {
+        setStatus("Instagram rate limited the crawl. Resume later to continue.");
+      } else if (response?.crawlJob?.hasMore) {
+        setStatus("Full crawl paused. Resume later to continue.");
+      } else {
+        setStatus("Full crawl completed.");
+      }
       await requestPreview();
       return;
     }
 
     if (response?.cancelled) {
-      setStatus("Full crawl paused before download.");
+      setStatus("Full crawl paused before any new downloads were queued.");
       await requestPreview();
       return;
     }
@@ -362,6 +417,8 @@ settingsButton.addEventListener("click", () => {
 });
 crawlButton.addEventListener("click", startFullCrawl);
 resetCrawlButton.addEventListener("click", resetFullCrawl);
+
+updateActionTooltips();
 
 loadTheme()
   .catch(() => {

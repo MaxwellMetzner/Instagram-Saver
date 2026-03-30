@@ -206,6 +206,21 @@ function uniqBy(items, getKey) {
   return result;
 }
 
+function mergeShortcodeQueues(...queues) {
+  const merged = [];
+  const seen = new Set();
+
+  for (const queue of queues) {
+    for (const shortcode of queue || []) {
+      if (!shortcode || seen.has(shortcode)) continue;
+      seen.add(shortcode);
+      merged.push(shortcode);
+    }
+  }
+
+  return merged;
+}
+
 function extractShortcodeFromUrl(url) {
   const match = String(url || "").match(/\/(?:p|reel|reels|tv)\/([^/?#&]+)/i);
   return match?.[1] || null;
@@ -346,7 +361,13 @@ async function removeCrawlJob(username) {
 function summarizeCrawlJob(job) {
   if (!job) return null;
 
-  const moreText = job.hasMore ? "More profile pages remain." : "Profile crawl is at the end of pagination.";
+  let moreText = job.hasMore ? "More profile pages remain." : "Profile crawl is at the end of pagination.";
+  if (job.status === "rate_limited" || job.lastBatch?.stopReason === "rate_limited") {
+    moreText = "Instagram rate limited the crawl. Resume later from the saved checkpoint.";
+  } else if (job.lastBatch?.stopReason === "cancelled_before_download") {
+    moreText = "Crawl is paused before download with the current checkpoint preserved.";
+  }
+
   return {
     username: job.username,
     title: job.title,
@@ -398,7 +419,10 @@ function describeProfilePaginationStopReason(stopReason) {
     instagram_reported_end: "Stopped because Instagram reported there were no more profile pages.",
     missing_end_cursor: "Stopped because Instagram reported more pages but did not return a next cursor.",
     pagination_error: "Stopped because Instagram returned an error while fetching more profile pages.",
+    rate_limited: "Stopped because Instagram rate-limited the crawl. Resume later from the saved checkpoint.",
     iteration_cap: "Stopped after the extension's pagination safety cap was reached.",
+    batch_limit_reached: "Stopped after the current crawl batch filled up while more profile pages remained.",
+    crawl_completed: "Stopped because the full profile crawl reached the end of profile pagination.",
     initial_page_sufficient: "Stopped because the initial profile page already satisfied the requested limit.",
     initial_page_only: "Stopped because Instagram returned only the initial profile page.",
     profile_id_missing: "Stopped because the profile id was missing for additional pagination.",
@@ -410,6 +434,11 @@ function describeProfilePaginationStopReason(stopReason) {
 
 function shouldReportProfileProgress(current, total) {
   return total <= 8 || current === 1 || current === total || current % 5 === 0;
+}
+
+function isRateLimitError(err) {
+  const details = toErrorDetails(err);
+  return details.code === "http_429" || Number(details.context?.status || 0) === 429;
 }
 
 function applyProfileMediaFilter(items, profileMediaFilter) {
@@ -1284,6 +1313,8 @@ async function collectFullProfileCrawlBatch(job, tabUrl) {
   let nextCursor = job.nextCursor || null;
   let hasMore = Boolean(job.hasMore);
   let pagesFetched = 0;
+  let stopReason = "crawl_completed";
+  let rateLimitError = null;
 
   while (selectedShortcodes.length < FULL_PROFILE_CRAWL_POST_BATCH_LIMIT && pendingShortcodes.length > 0) {
     selectedShortcodes.push(pendingShortcodes.shift());
@@ -1295,26 +1326,40 @@ async function collectFullProfileCrawlBatch(job, tabUrl) {
     nextCursor &&
     pagesFetched < FULL_PROFILE_CRAWL_PAGE_FETCH_LIMIT
   ) {
-    const page = await fetchProfileTimelinePage(job.userId, nextCursor, tabUrl);
-    pagesFetched += 1;
-    pendingShortcodes.push(...page.shortcodes);
-    nextCursor = page.nextCursor;
-    hasMore = page.hasNextPage;
+    try {
+      const page = await fetchProfileTimelinePage(job.userId, nextCursor, tabUrl);
+      pagesFetched += 1;
+      pendingShortcodes.push(...page.shortcodes);
+      nextCursor = page.nextCursor;
+      hasMore = page.hasNextPage;
+    } catch (err) {
+      if (!isRateLimitError(err)) {
+        throw err;
+      }
+
+      rateLimitError = toErrorDetails(err);
+      stopReason = "rate_limited";
+      break;
+    }
 
     while (selectedShortcodes.length < FULL_PROFILE_CRAWL_POST_BATCH_LIMIT && pendingShortcodes.length > 0) {
       selectedShortcodes.push(pendingShortcodes.shift());
     }
   }
 
+  const hasPendingWork = pendingShortcodes.length > 0 || Boolean(hasMore && nextCursor);
+  if (stopReason !== "rate_limited") {
+    stopReason = hasPendingWork ? "batch_limit_reached" : "crawl_completed";
+  }
+
   return {
     shortcodes: Array.from(new Set(selectedShortcodes)),
     pendingShortcodes,
     nextCursor,
-    hasMore: pendingShortcodes.length > 0 || Boolean(hasMore && nextCursor),
+    hasMore: hasPendingWork,
     pagesFetched,
-    stopReason: pendingShortcodes.length > 0 || (hasMore && nextCursor)
-      ? "batch_limit_reached"
-      : "crawl_completed"
+    stopReason,
+    rateLimitError
   };
 }
 
@@ -1520,6 +1565,8 @@ async function resolveProfilePlan(tabUrl, descriptor, settings, progressCallback
 async function resolveProfileBatchPlanFromShortcodes(tabUrl, job, shortcodes, settings, progressCallback = null) {
   const aggregatedItems = [];
   const failedPosts = [];
+  const remainingShortcodes = [];
+  let rateLimitError = null;
 
   for (let index = 0; index < shortcodes.length; index += 1) {
     const shortcode = shortcodes[index];
@@ -1547,6 +1594,16 @@ async function resolveProfileBatchPlanFromShortcodes(tabUrl, job, shortcodes, se
         }))
       );
     } catch (err) {
+      if (isRateLimitError(err)) {
+        rateLimitError = toErrorDetails(err);
+        remainingShortcodes.push(...shortcodes.slice(index));
+        logWarn("crawl_post_resolution_rate_limited", {
+          shortcode,
+          error: rateLimitError
+        });
+        break;
+      }
+
       failedPosts.push({
         shortcode,
         error: toErrorDetails(err)
@@ -1558,6 +1615,7 @@ async function resolveProfileBatchPlanFromShortcodes(tabUrl, job, shortcodes, se
     }
   }
 
+  const processedPostCount = shortcodes.length - remainingShortcodes.length;
   const unfilteredItems = uniqBy(aggregatedItems, (item) => item.url);
   const filteredItems = applyProfileMediaFilter(unfilteredItems, settings.profileMediaFilter);
 
@@ -1573,7 +1631,7 @@ async function resolveProfileBatchPlanFromShortcodes(tabUrl, job, shortcodes, se
       pageUrl: job.pageUrl || tabUrl,
       timestamp: null,
       source: "instagram_profile_full_crawl",
-      profilePostCount: shortcodes.length,
+      profilePostCount: processedPostCount,
       failedPostCount: failedPosts.length,
       profileMediaFilter: settings.profileMediaFilter,
       unfilteredItemCount: unfilteredItems.length,
@@ -1581,7 +1639,10 @@ async function resolveProfileBatchPlanFromShortcodes(tabUrl, job, shortcodes, se
       pagination: null
     },
     items: filteredItems,
-    failedPosts
+    failedPosts,
+    processedPostCount,
+    remainingShortcodes,
+    rateLimitError
   };
 }
 
@@ -2499,167 +2560,225 @@ async function runFullProfileCrawl(tab) {
   await setBadge(tabId, "CR", BADGE_COLORS.working, `Crawling @${crawlJob.username}`);
   await sendToast(tabId, `Continuing full crawl for @${crawlJob.username}...`, "info");
 
+  const aggregateResult = {
+    requested: 0,
+    downloaded: 0,
+    skipped: 0,
+    failed: 0
+  };
+  let hasConfirmedDownloads = !settings.confirmBeforeDownload;
+
   try {
-    const batch = await collectFullProfileCrawlBatch(crawlJob, tabUrl);
-    if (!batch.shortcodes.length) {
-      crawlJob = {
-        ...crawlJob,
-        pendingShortcodes: batch.pendingShortcodes,
-        nextCursor: batch.nextCursor,
-        hasMore: false,
-        status: "completed",
-        updatedAt: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
-        lastBatch: {
-          processedPosts: 0,
-          resolvedMedia: 0,
-          queued: 0,
+    while (true) {
+      const batch = await collectFullProfileCrawlBatch(crawlJob, tabUrl);
+      const batchPausedForRateLimit = batch.stopReason === "rate_limited";
+
+      if (!batch.shortcodes.length) {
+        const now = new Date().toISOString();
+        crawlJob = {
+          ...crawlJob,
+          pendingShortcodes: batch.pendingShortcodes,
+          nextCursor: batch.nextCursor,
+          hasMore: batch.hasMore,
+          status: batchPausedForRateLimit ? "rate_limited" : "completed",
+          updatedAt: now,
+          completedAt: batchPausedForRateLimit ? null : now,
+          lastError: batch.rateLimitError?.message || null,
+          lastBatch: {
+            processedPosts: 0,
+            resolvedMedia: 0,
+            queued: 0,
+            skipped: 0,
+            failed: 0,
+            pagesFetched: batch.pagesFetched,
+            stopReason: batch.stopReason
+          }
+        };
+        await saveCrawlJob(crawlJob);
+
+        if (batchPausedForRateLimit) {
+          await setBadge(tabId, "429", BADGE_COLORS.error, `Instagram rate limited @${crawlJob.username}`);
+          await sendToast(tabId, `Instagram rate limited the full crawl for @${crawlJob.username}. Resume later from the saved checkpoint.`, "info");
+          clearBadgeSoon(tabId, tabUrl, 2600);
+          return {
+            ok: true,
+            rateLimited: true,
+            crawlJob: summarizeCrawlJob(crawlJob),
+            result: aggregateResult
+          };
+        }
+
+        await setBadge(tabId, "OK", BADGE_COLORS.success, `Full crawl complete for @${crawlJob.username}`);
+        clearBadgeSoon(tabId, tabUrl);
+        return {
+          ok: true,
+          crawlJob: summarizeCrawlJob(crawlJob),
+          result: aggregateResult
+        };
+      }
+
+      const batchPlanResult = await resolveProfileBatchPlanFromShortcodes(tabUrl, crawlJob, batch.shortcodes, settings, async (progress) => {
+        await setBadge(tabId, `${progress.current}/${progress.total}`, BADGE_COLORS.working, `Crawling @${crawlJob.username} ${progress.current}/${progress.total}`);
+        if (progress.shouldNotify) {
+          await sendToast(tabId, `Crawling @${crawlJob.username}: ${progress.current}/${progress.total} posts...`, "info");
+        }
+      });
+
+      const processedPostCount = Number(batchPlanResult.processedPostCount || 0);
+      const resolutionPausedForRateLimit = Boolean(batchPlanResult.rateLimitError);
+      const pausedForRateLimit = batchPausedForRateLimit || resolutionPausedForRateLimit;
+      const preservedShortcodes = resolutionPausedForRateLimit
+        ? mergeShortcodeQueues(batchPlanResult.remainingShortcodes, batch.pendingShortcodes)
+        : batch.pendingShortcodes;
+      const hasSavedWork = preservedShortcodes.length > 0 || Boolean(batch.hasMore && batch.nextCursor);
+
+      const plan = {
+        ...batchPlanResult,
+        meta: {
+          ...batchPlanResult.meta,
+          batchDiagnostics: [
+            `Processed ${processedPostCount} profile post${processedPostCount === 1 ? "" : "s"} in this crawl batch.`,
+            pausedForRateLimit
+              ? "Instagram rate limited this crawl batch. Resume later from the saved checkpoint."
+              : hasSavedWork
+                ? "Continuing automatically into older profile posts."
+                : "Reached the end of profile pagination in this run."
+          ]
+        }
+      };
+
+      let result;
+      if (plan.items.length > 0) {
+        if (!hasConfirmedDownloads && settings.confirmBeforeDownload) {
+          const confirmed = await requestDownloadConfirmation(tabId, plan);
+          if (!confirmed) {
+            const requeuedShortcodes = mergeShortcodeQueues(batch.shortcodes, batch.pendingShortcodes);
+            crawlJob = {
+              ...crawlJob,
+              status: "paused",
+              updatedAt: new Date().toISOString(),
+              pendingShortcodes: requeuedShortcodes,
+              nextCursor: batch.nextCursor,
+              hasMore: requeuedShortcodes.length > 0 || Boolean(batch.hasMore && batch.nextCursor),
+              completedAt: null,
+              lastError: null,
+              lastBatch: {
+                processedPosts: 0,
+                resolvedMedia: 0,
+                queued: 0,
+                skipped: 0,
+                failed: 0,
+                pagesFetched: batch.pagesFetched,
+                stopReason: "cancelled_before_download"
+              }
+            };
+            await saveCrawlJob(crawlJob);
+            await setBadge(tabId, "CAN", BADGE_COLORS.error, "Full crawl paused");
+            clearBadgeSoon(tabId, tabUrl, 2200);
+            return {
+              ok: false,
+              cancelled: true,
+              crawlJob: summarizeCrawlJob(crawlJob)
+            };
+          }
+
+          hasConfirmedDownloads = true;
+        }
+
+        result = await queueDownloads(plan, settings);
+        if (settings.exportBatchReport) {
+          try {
+            const usedPaths = new Set(result.plannedFilenames || []);
+            if (result.metadata?.filename) {
+              usedPaths.add(result.metadata.filename);
+            }
+            const reportFilename = ensureUniqueRelativePath(
+              buildBatchReportFilename(plan.meta, settings),
+              `${plan.meta.id || plan.meta.username || "report"}`,
+              usedPaths
+            );
+            result.report = await queueBatchReportDownload(plan, result, reportFilename, settings);
+          } catch (err) {
+            logWarn("full_crawl_batch_report_failed", {
+              error: toErrorDetails(err)
+            });
+          }
+        }
+
+        await recordDownloadHistory(plan, result);
+      } else {
+        result = {
+          requested: 0,
+          downloaded: 0,
           skipped: 0,
           failed: 0,
+          failures: [],
+          skippedItems: [],
+          metadata: null,
+          alreadyDownloaded: false,
+          recordedKeys: [],
+          plannedFilenames: []
+        };
+      }
+
+      aggregateResult.requested += Number(result.requested || 0);
+      aggregateResult.downloaded += Number(result.downloaded || 0);
+      aggregateResult.skipped += Number(result.skipped || 0);
+      aggregateResult.failed += Number(result.failed || 0);
+
+      const now = new Date().toISOString();
+      crawlJob = {
+        ...crawlJob,
+        pendingShortcodes: preservedShortcodes,
+        nextCursor: batch.nextCursor,
+        hasMore: hasSavedWork,
+        status: pausedForRateLimit ? "rate_limited" : hasSavedWork ? "running" : "completed",
+        updatedAt: now,
+        completedAt: pausedForRateLimit || hasSavedWork ? null : now,
+        batchesCompleted: Number(crawlJob.batchesCompleted || 0) + 1,
+        totalPostsResolved: Number(crawlJob.totalPostsResolved || 0) + processedPostCount,
+        totalFailedPosts: Number(crawlJob.totalFailedPosts || 0) + Number(batchPlanResult.failedPosts?.length || 0),
+        totalMediaQueued: Number(crawlJob.totalMediaQueued || 0) + Number(result.downloaded || 0),
+        totalMediaSkipped: Number(crawlJob.totalMediaSkipped || 0) + Number(result.skipped || 0),
+        totalMediaFailed: Number(crawlJob.totalMediaFailed || 0) + Number(result.failed || 0),
+        lastError: pausedForRateLimit
+          ? batchPlanResult.rateLimitError?.message || batch.rateLimitError?.message || "Instagram rate limited the crawl."
+          : null,
+        lastBatch: {
+          processedPosts: processedPostCount,
+          resolvedMedia: plan.items.length,
+          queued: result.downloaded || 0,
+          skipped: result.skipped || 0,
+          failed: result.failed || 0,
           pagesFetched: batch.pagesFetched,
-          stopReason: batch.stopReason
+          stopReason: pausedForRateLimit ? "rate_limited" : hasSavedWork ? "batch_limit_reached" : "crawl_completed"
         }
       };
       await saveCrawlJob(crawlJob);
-      await setBadge(tabId, "OK", BADGE_COLORS.success, `Full crawl complete for @${crawlJob.username}`);
-      clearBadgeSoon(tabId, tabUrl);
-      return {
-        ok: true,
-        crawlJob: summarizeCrawlJob(crawlJob),
-        result: {
-          downloaded: 0,
-          skipped: 0,
-          failed: 0
-        }
-      };
+
+      if (pausedForRateLimit) {
+        await setBadge(tabId, "429", BADGE_COLORS.error, `Instagram rate limited @${crawlJob.username}`);
+        await sendToast(tabId, `Instagram rate limited the full crawl for @${crawlJob.username}. Resume later from the saved checkpoint.`, "info");
+        clearBadgeSoon(tabId, tabUrl, 2600);
+        return {
+          ok: true,
+          rateLimited: true,
+          crawlJob: summarizeCrawlJob(crawlJob),
+          result: aggregateResult
+        };
+      }
+
+      if (!hasSavedWork) {
+        await setBadge(tabId, "OK", BADGE_COLORS.success, `Full crawl complete for @${crawlJob.username}`);
+        await sendToast(tabId, `Full crawl completed for @${crawlJob.username}.`, "success");
+        clearBadgeSoon(tabId, tabUrl);
+        return {
+          ok: true,
+          crawlJob: summarizeCrawlJob(crawlJob),
+          result: aggregateResult
+        };
+      }
     }
-
-    const batchPlanResult = await resolveProfileBatchPlanFromShortcodes(tabUrl, crawlJob, batch.shortcodes, settings, async (progress) => {
-      await setBadge(tabId, `${progress.current}/${progress.total}`, BADGE_COLORS.working, `Crawling @${crawlJob.username} ${progress.current}/${progress.total}`);
-      if (progress.shouldNotify) {
-        await sendToast(tabId, `Crawling @${crawlJob.username}: ${progress.current}/${progress.total} posts...`, "info");
-      }
-    });
-
-    const plan = {
-      ...batchPlanResult,
-      meta: {
-        ...batchPlanResult.meta,
-        batchDiagnostics: [
-          `Processed ${batch.shortcodes.length} profile post${batch.shortcodes.length === 1 ? "" : "s"} in this crawl batch.`,
-          batch.stopReason === "crawl_completed"
-            ? "Reached the end of profile pagination in this run."
-            : "Batch limit reached. Resume the crawl to continue from the saved cursor."
-        ]
-      }
-    };
-
-    let result;
-    if (plan.items.length > 0) {
-      if (settings.confirmBeforeDownload) {
-        const confirmed = await requestDownloadConfirmation(tabId, plan);
-        if (!confirmed) {
-          crawlJob = {
-            ...crawlJob,
-            status: "paused",
-            updatedAt: new Date().toISOString(),
-            pendingShortcodes: batch.pendingShortcodes,
-            nextCursor: batch.nextCursor,
-            hasMore: batch.hasMore,
-            lastBatch: {
-              processedPosts: batch.shortcodes.length,
-              resolvedMedia: plan.items.length,
-              queued: 0,
-              skipped: 0,
-              failed: 0,
-              pagesFetched: batch.pagesFetched,
-              stopReason: "cancelled_before_download"
-            }
-          };
-          await saveCrawlJob(crawlJob);
-          await setBadge(tabId, "CAN", BADGE_COLORS.error, "Full crawl paused");
-          clearBadgeSoon(tabId, tabUrl, 2200);
-          return {
-            ok: false,
-            cancelled: true,
-            crawlJob: summarizeCrawlJob(crawlJob)
-          };
-        }
-      }
-
-      result = await queueDownloads(plan, settings);
-      if (settings.exportBatchReport) {
-        try {
-          const usedPaths = new Set(result.plannedFilenames || []);
-          if (result.metadata?.filename) {
-            usedPaths.add(result.metadata.filename);
-          }
-          const reportFilename = ensureUniqueRelativePath(
-            buildBatchReportFilename(plan.meta, settings),
-            `${plan.meta.id || plan.meta.username || "report"}`,
-            usedPaths
-          );
-          result.report = await queueBatchReportDownload(plan, result, reportFilename, settings);
-        } catch (err) {
-          logWarn("full_crawl_batch_report_failed", {
-            error: toErrorDetails(err)
-          });
-        }
-      }
-
-      await recordDownloadHistory(plan, result);
-    } else {
-      result = {
-        requested: 0,
-        downloaded: 0,
-        skipped: 0,
-        failed: 0,
-        failures: [],
-        skippedItems: [],
-        metadata: null,
-        alreadyDownloaded: false,
-        recordedKeys: [],
-        plannedFilenames: []
-      };
-    }
-
-    crawlJob = {
-      ...crawlJob,
-      pendingShortcodes: batch.pendingShortcodes,
-      nextCursor: batch.nextCursor,
-      hasMore: batch.hasMore,
-      status: batch.hasMore ? "paused" : "completed",
-      updatedAt: new Date().toISOString(),
-      completedAt: batch.hasMore ? null : new Date().toISOString(),
-      batchesCompleted: Number(crawlJob.batchesCompleted || 0) + 1,
-      totalPostsResolved: Number(crawlJob.totalPostsResolved || 0) + batch.shortcodes.length,
-      totalFailedPosts: Number(crawlJob.totalFailedPosts || 0) + Number(batchPlanResult.failedPosts?.length || 0),
-      totalMediaQueued: Number(crawlJob.totalMediaQueued || 0) + Number(result.downloaded || 0),
-      totalMediaSkipped: Number(crawlJob.totalMediaSkipped || 0) + Number(result.skipped || 0),
-      totalMediaFailed: Number(crawlJob.totalMediaFailed || 0) + Number(result.failed || 0),
-      lastError: null,
-      lastBatch: {
-        processedPosts: batch.shortcodes.length,
-        resolvedMedia: plan.items.length,
-        queued: result.downloaded || 0,
-        skipped: result.skipped || 0,
-        failed: result.failed || 0,
-        pagesFetched: batch.pagesFetched,
-        stopReason: batch.stopReason
-      }
-    };
-    await saveCrawlJob(crawlJob);
-
-    const continuationText = batch.hasMore ? "Resume to continue from the saved cursor." : "Full profile crawl completed.";
-    await setBadge(tabId, "OK", BADGE_COLORS.success, continuationText);
-    await sendToast(tabId, continuationText, "success");
-    clearBadgeSoon(tabId, tabUrl);
-
-    return {
-      ok: true,
-      crawlJob: summarizeCrawlJob(crawlJob),
-      result
-    };
   } catch (err) {
     crawlJob = {
       ...crawlJob,

@@ -5,7 +5,7 @@ Instagram Saver is a Chrome extension for downloading media from Instagram pages
 ## What It Does
 
 - Downloads media from the current Instagram post, reel, story, or highlight page
-- Supports profile-page batch downloads and resumable full-profile crawls
+- Supports profile-page batch downloads and full-profile crawls that keep running automatically until the profile ends or Instagram rate limits the session
 - Uses your logged-in Instagram session, so private or restricted content still follows normal Instagram access rules
 - Can export optional JSON metadata and batch reports alongside downloads
 - Lets you customize folders, filenames, duplicate handling, and download prompts
@@ -23,7 +23,7 @@ Instagram Saver is a Chrome extension for downloading media from Instagram pages
 2. Click the extension icon to open the popup.
 3. Start the download from the popup, or use the Instagram page context menu for a direct download.
 
-On profile pages, the popup can also start or resume a larger crawl. Crawl progress and cursors are saved in extension storage so long runs can be resumed later.
+On profile pages, the popup can also start or resume a larger crawl. The extension keeps moving through saved 48-post checkpoints automatically and only relies on the stored cursor when a crawl is interrupted, cancelled, or rate limited.
 
 ## Settings
 
