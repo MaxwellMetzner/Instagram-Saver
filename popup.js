@@ -29,6 +29,7 @@ const statusEl = document.getElementById("status");
 const DEFAULT_THEME_MODE = "light";
 
 let activeTab = null;
+let currentPreview = null;
 
 function applyTheme(themeMode) {
   const resolvedTheme = ["light", "dark", "instagram"].includes(themeMode) ? themeMode : DEFAULT_THEME_MODE;
@@ -64,6 +65,39 @@ function formatProfileMediaFilterText(profileMediaFilter) {
   return "all media";
 }
 
+function formatFullCrawlPaceText(fullCrawlPace) {
+  if (fullCrawlPace === "safer") return "safer and slower";
+  if (fullCrawlPace === "aggressive" || fullCrawlPace === "faster") return "aggressive";
+  return "balanced";
+}
+
+function getResumeTimestamp(resumeAfter) {
+  const timestamp = new Date(resumeAfter || "").getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function formatResumeAfterText(resumeAfter) {
+  const timestamp = getResumeTimestamp(resumeAfter);
+  if (!timestamp) {
+    return "";
+  }
+
+  const date = new Date(timestamp);
+  const remainingMinutes = Math.max(0, Math.ceil((timestamp - Date.now()) / 60000));
+  const absoluteLabel = date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+
+  if (remainingMinutes <= 0) {
+    return `${absoluteLabel} (available now)`;
+  }
+
+  return `${absoluteLabel} (${remainingMinutes} min)`;
+}
+
 function updateActionTooltips(preview = null) {
   const summary = preview?.summary || null;
   const crawlJob = preview?.crawlJob || null;
@@ -85,8 +119,22 @@ function updateActionTooltips(preview = null) {
       return;
     }
 
+    if (crawlJob.status === "running") {
+      crawlButton.title = "Stops the active full-profile crawl after the current work finishes and keeps the saved checkpoint.";
+      return;
+    }
+
+    if (crawlJob.status === "stopping") {
+      crawlButton.title = "Stop requested. The current crawl will pause after the current work finishes.";
+      return;
+    }
+
     if (crawlJob.status === "rate_limited") {
-      crawlButton.title = "Resumes the saved full-profile crawl from the last checkpoint after Instagram rate limited the session.";
+      const resumeAfterText = formatResumeAfterText(crawlJob.resumeAfter);
+      const cooldownActive = Boolean(getResumeTimestamp(crawlJob.resumeAfter) && getResumeTimestamp(crawlJob.resumeAfter) > Date.now());
+      crawlButton.title = cooldownActive && resumeAfterText
+        ? `Resumes the saved full-profile crawl after the current cooldown ends at ${resumeAfterText}.`
+        : "Resumes the saved full-profile crawl from the last checkpoint after Instagram rate limited the session.";
       return;
     }
 
@@ -95,7 +143,7 @@ function updateActionTooltips(preview = null) {
   }
 
   downloadButton.title = "Download the media resolved for the current Instagram page.";
-  crawlButton.title = "Attempt the full profile in one run, saving progress if the crawl is interrupted or rate limited.";
+  crawlButton.title = "Attempt the full profile in one run, saving progress if the crawl is interrupted, paused, or rate limited.";
 }
 
 function isDuplicateErrorText(candidate, seenValues) {
@@ -124,16 +172,33 @@ function renderCrawlJob(preview) {
     return;
   }
 
-  crawlButton.textContent = crawlJob.status === "completed" ? "Start New Crawl" : "Resume Full Crawl";
+  const resumeTimestamp = getResumeTimestamp(crawlJob.resumeAfter);
+  const cooldownActive = Boolean(resumeTimestamp && resumeTimestamp > Date.now());
+  const cooldownText = formatResumeAfterText(crawlJob.resumeAfter);
+  crawlButton.textContent = crawlJob.status === "completed"
+    ? "Start New Crawl"
+    : crawlJob.status === "running"
+      ? "Stop Crawl"
+      : crawlJob.status === "stopping"
+        ? "Stop Requested"
+        : crawlJob.status === "rate_limited" && cooldownActive
+          ? "Resume After Cooldown"
+          : "Resume Full Crawl";
   crawlStatusActionsEl.classList.remove("hidden");
   crawlSummaryEl.classList.remove("hidden");
   crawlSummaryEl.textContent = crawlJob.statusLine;
 
   crawlDiagnosticsListEl.replaceChildren();
-  const checkpointLine = crawlJob.status === "rate_limited"
-    ? "Instagram rate limited the last crawl attempt. Resume later from the saved checkpoint."
+  const checkpointLine = crawlJob.status === "stopping"
+    ? "Stop requested. The crawl will pause after the current work finishes."
+    : crawlJob.status === "rate_limited"
+      ? cooldownActive && cooldownText
+        ? "Instagram rate limited the last crawl attempt. Resume after the saved cooldown."
+        : "Instagram rate limited the last crawl attempt. Resume later from the saved checkpoint."
     : crawlJob.lastBatch?.stopReason === "cancelled_before_download"
       ? "The current crawl batch is preserved and can be resumed from the saved checkpoint."
+      : crawlJob.lastBatch?.stopReason === "stopped_by_user"
+        ? "The crawl was stopped manually and can be resumed from the saved checkpoint."
       : crawlJob.hasMore
         ? "More profile pages remain after the saved cursor."
         : "Saved cursor is at the end of the profile.";
@@ -141,11 +206,16 @@ function renderCrawlJob(preview) {
     `Status: ${crawlJob.status}.`,
     `Posts processed: ${crawlJob.totalPostsResolved}.`,
     `Pending saved shortcodes: ${crawlJob.pendingShortcodes}.`,
+    `Crawl pace: ${formatFullCrawlPaceText(crawlJob.fullCrawlPace)}.`,
     checkpointLine,
     crawlJob.lastBatch
       ? `Last batch processed ${crawlJob.lastBatch.processedPosts} posts and queued ${crawlJob.lastBatch.queued} file${crawlJob.lastBatch.queued === 1 ? "" : "s"}.`
       : "No crawl batches have been processed yet."
   ];
+
+  if (cooldownText) {
+    diagnostics.push(`Resume after: ${cooldownText}.`);
+  }
 
   if (crawlJob.lastError) {
     diagnostics.push(`Last error: ${crawlJob.lastError}`);
@@ -165,6 +235,7 @@ async function getActiveInstagramTab() {
 }
 
 function renderPreview(preview) {
+  currentPreview = preview;
   errorCard.classList.add("hidden");
   metricsCard.classList.remove("hidden");
   detailsCard.classList.remove("hidden");
@@ -218,6 +289,7 @@ function renderPreview(preview) {
 }
 
 function renderError(error) {
+  currentPreview = null;
   metricsCard.classList.add("hidden");
   detailsCard.classList.add("hidden");
   const isUnsupportedPage = error?.code === "unsupported_url";
@@ -334,8 +406,19 @@ async function startFullCrawl() {
     return;
   }
 
+  if (currentPreview?.crawlJob?.status === "running" || currentPreview?.crawlJob?.status === "stopping") {
+    await stopFullCrawl();
+    return;
+  }
+
+  const cooldownTimestamp = getResumeTimestamp(currentPreview?.crawlJob?.resumeAfter);
+  if (currentPreview?.crawlJob?.status === "rate_limited" && cooldownTimestamp && cooldownTimestamp > Date.now()) {
+    setStatus(`Instagram cooldown is active. Resume after ${formatResumeAfterText(currentPreview.crawlJob.resumeAfter)}.`);
+    return;
+  }
+
   setBusy(true);
-  setStatus("Continuing full crawl...");
+  setStatus("Starting full crawl. You can close this popup once the crawl begins.");
 
   try {
     const response = await chrome.runtime.sendMessage({
@@ -345,8 +428,15 @@ async function startFullCrawl() {
     });
 
     if (response?.ok) {
-      if (response?.rateLimited || response?.crawlJob?.status === "rate_limited") {
-        setStatus("Instagram rate limited the crawl. Resume later to continue.");
+      if (response?.alreadyRunning || response?.crawlJob?.status === "running") {
+        setStatus("Full crawl is already running. Use Stop Crawl to pause it.");
+      } else if (response?.stopped || response?.crawlJob?.status === "paused") {
+        setStatus("Full crawl paused.");
+      } else if (response?.rateLimited || response?.crawlJob?.status === "rate_limited") {
+        const resumeAfterText = formatResumeAfterText(response?.crawlJob?.resumeAfter);
+        setStatus(resumeAfterText
+          ? `Instagram rate limited the crawl. Resume after ${resumeAfterText}.`
+          : "Instagram rate limited the crawl. Resume later to continue.");
       } else if (response?.crawlJob?.hasMore) {
         setStatus("Full crawl paused. Resume later to continue.");
       } else {
@@ -373,6 +463,35 @@ async function startFullCrawl() {
       message: String(error?.message || error),
       suggestion: "Try again after reloading the profile page."
     });
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function stopFullCrawl() {
+  if (!activeTab?.id) {
+    setStatus("No Instagram tab selected.", true);
+    return;
+  }
+
+  setBusy(true);
+  setStatus("Stopping full crawl...");
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "STOP_FULL_PROFILE_CRAWL",
+      tabId: activeTab.id,
+      tabUrl: activeTab.url || ""
+    });
+
+    if (!response?.ok) {
+      throw new Error(response?.error?.message || "Could not stop full crawl.");
+    }
+
+    setStatus(response?.crawlJob?.status === "stopping" ? "Stop requested. The crawl will pause shortly." : "Full crawl paused.");
+    await requestPreview();
+  } catch (error) {
+    setStatus(String(error?.message || error), true);
   } finally {
     setBusy(false);
   }

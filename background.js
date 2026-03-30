@@ -6,6 +6,7 @@ const DEFAULT_ACTION_TITLE = "Download media from the current Instagram page";
 const DEFAULT_POPUP_PATH = "popup.html";
 const BADGE_REFRESH_DELAY_MS = 350;
 const PREVIEW_CACHE_TTL_MS = 15000;
+const PREVIEW_SESSION_STORAGE_KEY = "pagePreviewByTab";
 const BADGE_COLORS = {
   working: "#1D4ED8",
   success: "#15803D",
@@ -13,22 +14,45 @@ const BADGE_COLORS = {
 };
 const badgeRefreshTimers = new Map();
 const previewCache = new Map();
+const activeFullProfileCrawls = new Set();
+const requestedFullProfileCrawlStops = new Set();
 const DOWNLOAD_HISTORY_LIMIT = 20;
 const DOWNLOADED_MEDIA_KEY_LIMIT = 4000;
 const FULL_PROFILE_CRAWL_POST_BATCH_LIMIT = 48;
 const FULL_PROFILE_CRAWL_PAGE_FETCH_LIMIT = 4;
+const FULL_CRAWL_PACING_PROFILES = {
+  safer: {
+    pageFetchDelayRangeMs: [1200, 2200],
+    postResolveDelayRangeMs: [320, 700],
+    batchDelayRangeMs: [1800, 3000],
+    rateLimitCooldownMs: 30 * 60 * 1000
+  },
+  balanced: {
+    pageFetchDelayRangeMs: [700, 1400],
+    postResolveDelayRangeMs: [140, 320],
+    batchDelayRangeMs: [900, 1700],
+    rateLimitCooldownMs: 20 * 60 * 1000
+  },
+  aggressive: {
+    pageFetchDelayRangeMs: [250, 650],
+    postResolveDelayRangeMs: [0, 120],
+    batchDelayRangeMs: [300, 700],
+    rateLimitCooldownMs: 15 * 60 * 1000
+  }
+};
 const DEFAULT_SETTINGS = {
   easyMode: false,
   confirmBeforeDownload: true,
-  saveMetadataSidecar: true,
+  saveMetadataSidecar: false,
   placeMetadataInSubfolder: false,
   exportBatchReport: false,
   exportPostComments: false,
-  promptForSingleDownload: true,
+  promptForSingleDownload: false,
   duplicateMode: "history",
   skipExistingDownloads: true,
   maxProfilePosts: 24,
   profileMediaFilter: "all",
+  fullCrawlPace: "aggressive",
   folderTemplate: "instagram/{username}",
   filenameTemplate: "{username}_{id}_{index}",
   metadataFilenameTemplate: "{username}_{id}_metadata"
@@ -268,6 +292,12 @@ async function getSettings() {
   const profileMediaFilter = ["all", "images", "videos"].includes(stored.profileMediaFilter)
     ? stored.profileMediaFilter
     : "all";
+  const requestedFullCrawlPace = stored.fullCrawlPace === "faster"
+    ? "aggressive"
+    : stored.fullCrawlPace;
+  const fullCrawlPace = Object.prototype.hasOwnProperty.call(FULL_CRAWL_PACING_PROFILES, requestedFullCrawlPace)
+    ? requestedFullCrawlPace
+    : DEFAULT_SETTINGS.fullCrawlPace;
 
   return {
     ...DEFAULT_SETTINGS,
@@ -275,6 +305,7 @@ async function getSettings() {
     duplicateMode,
     skipExistingDownloads: duplicateMode === "history",
     profileMediaFilter,
+    fullCrawlPace,
     maxProfilePosts: Math.max(1, Number(stored.maxProfilePosts || DEFAULT_SETTINGS.maxProfilePosts) || DEFAULT_SETTINGS.maxProfilePosts)
   };
 }
@@ -366,6 +397,10 @@ function summarizeCrawlJob(job) {
     moreText = "Instagram rate limited the crawl. Resume later from the saved checkpoint.";
   } else if (job.lastBatch?.stopReason === "cancelled_before_download") {
     moreText = "Crawl is paused before download with the current checkpoint preserved.";
+  } else if (job.status === "stopping") {
+    moreText = "Stop requested. The crawl will pause after the current work completes.";
+  } else if (job.lastBatch?.stopReason === "stopped_by_user") {
+    moreText = "Crawl was stopped by the user and can be resumed from the saved checkpoint.";
   }
 
   return {
@@ -382,7 +417,12 @@ function summarizeCrawlJob(job) {
     pendingShortcodes: Array.isArray(job.pendingShortcodes) ? job.pendingShortcodes.length : 0,
     nextCursor: job.nextCursor || null,
     profileMediaFilter: job.profileMediaFilter || "all",
+    fullCrawlPace: job.fullCrawlPace === "faster"
+      ? "aggressive"
+      : job.fullCrawlPace || DEFAULT_SETTINGS.fullCrawlPace,
     duplicateMode: job.duplicateMode || "history",
+    resumeAfter: job.resumeAfter || null,
+    rateLimitCount: Number(job.rateLimitCount || 0),
     updatedAt: job.updatedAt || null,
     completedAt: job.completedAt || null,
     lastError: job.lastError || null,
@@ -420,6 +460,7 @@ function describeProfilePaginationStopReason(stopReason) {
     missing_end_cursor: "Stopped because Instagram reported more pages but did not return a next cursor.",
     pagination_error: "Stopped because Instagram returned an error while fetching more profile pages.",
     rate_limited: "Stopped because Instagram rate-limited the crawl. Resume later from the saved checkpoint.",
+    stopped_by_user: "Stopped because the crawl was paused manually from the popup.",
     iteration_cap: "Stopped after the extension's pagination safety cap was reached.",
     batch_limit_reached: "Stopped after the current crawl batch filled up while more profile pages remained.",
     crawl_completed: "Stopped because the full profile crawl reached the end of profile pagination.",
@@ -436,9 +477,88 @@ function shouldReportProfileProgress(current, total) {
   return total <= 8 || current === 1 || current === total || current % 5 === 0;
 }
 
+function getFullCrawlPacingProfile(fullCrawlPace) {
+  return FULL_CRAWL_PACING_PROFILES[fullCrawlPace] || FULL_CRAWL_PACING_PROFILES[DEFAULT_SETTINGS.fullCrawlPace];
+}
+
+function getJitteredDelayMs(range) {
+  if (!Array.isArray(range) || range.length < 2) {
+    return 0;
+  }
+
+  const minValue = Number(range[0] || 0);
+  const maxValue = Number(range[1] || 0);
+  const min = Math.max(0, Math.min(minValue, maxValue));
+  const max = Math.max(0, Math.max(minValue, maxValue));
+  if (max <= min) {
+    return min;
+  }
+
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pauseForFullCrawlStep(settings, stepKey) {
+  const profile = getFullCrawlPacingProfile(settings?.fullCrawlPace);
+  const delayMs = getJitteredDelayMs(profile?.[stepKey]);
+  if (delayMs > 0) {
+    await sleep(delayMs);
+  }
+}
+
+function buildRateLimitResumeAfter(errorDetails, settings) {
+  const retryAfterSeconds = Number(errorDetails?.context?.retryAfterSeconds || 0);
+  const profile = getFullCrawlPacingProfile(settings?.fullCrawlPace);
+  const cooldownMs = retryAfterSeconds > 0
+    ? retryAfterSeconds * 1000
+    : profile.rateLimitCooldownMs;
+
+  return new Date(Date.now() + cooldownMs).toISOString();
+}
+
+function isCrawlCooldownActive(job) {
+  if (!job?.resumeAfter) {
+    return false;
+  }
+
+  const resumeAt = new Date(job.resumeAfter).getTime();
+  return Number.isFinite(resumeAt) && resumeAt > Date.now();
+}
+
 function isRateLimitError(err) {
   const details = toErrorDetails(err);
   return details.code === "http_429" || Number(details.context?.status || 0) === 429;
+}
+
+function getFullProfileCrawlRunKey(username) {
+  return String(username || "").trim().toLowerCase();
+}
+
+function isFullProfileCrawlActive(username) {
+  return activeFullProfileCrawls.has(getFullProfileCrawlRunKey(username));
+}
+
+function markFullProfileCrawlActive(username) {
+  activeFullProfileCrawls.add(getFullProfileCrawlRunKey(username));
+}
+
+function clearFullProfileCrawlActive(username) {
+  activeFullProfileCrawls.delete(getFullProfileCrawlRunKey(username));
+}
+
+function requestFullProfileCrawlStop(username) {
+  requestedFullProfileCrawlStops.add(getFullProfileCrawlRunKey(username));
+}
+
+function clearFullProfileCrawlStop(username) {
+  requestedFullProfileCrawlStops.delete(getFullProfileCrawlRunKey(username));
+}
+
+function isFullProfileCrawlStopRequested(username) {
+  return requestedFullProfileCrawlStops.has(getFullProfileCrawlRunKey(username));
 }
 
 function applyProfileMediaFilter(items, profileMediaFilter) {
@@ -493,6 +613,90 @@ function buildPreviewCacheKey(tabUrl, settings) {
   };
 
   return JSON.stringify(keyPayload);
+}
+
+async function getSessionPreviewEntries() {
+  try {
+    const stored = await chrome.storage.session.get({
+      [PREVIEW_SESSION_STORAGE_KEY]: {}
+    });
+    const entries = stored[PREVIEW_SESSION_STORAGE_KEY];
+    return entries && typeof entries === "object" ? entries : {};
+  } catch (err) {
+    logWarn("preview_session_cache_read_failed", {
+      error: toErrorDetails(err)
+    });
+    return {};
+  }
+}
+
+async function getSessionCachedPreview(tabId, cacheKey, tabUrl) {
+  if (!tabId) return null;
+
+  const entries = await getSessionPreviewEntries();
+  const entry = entries[String(tabId)];
+  if (!entry || entry.cacheKey !== cacheKey || entry.tabUrl !== tabUrl) {
+    return null;
+  }
+
+  return entry.preview || null;
+}
+
+async function setSessionCachedPreview(tabId, cacheKey, tabUrl, preview) {
+  if (!tabId) return;
+
+  try {
+    const entries = await getSessionPreviewEntries();
+    entries[String(tabId)] = {
+      cacheKey,
+      tabUrl,
+      preview
+    };
+    await chrome.storage.session.set({
+      [PREVIEW_SESSION_STORAGE_KEY]: entries
+    });
+  } catch (err) {
+    logWarn("preview_session_cache_write_failed", {
+      tabId,
+      error: toErrorDetails(err)
+    });
+  }
+}
+
+async function clearSessionCachedPreviewForTab(tabId) {
+  if (!tabId) return;
+
+  try {
+    const entries = await getSessionPreviewEntries();
+    if (!Object.prototype.hasOwnProperty.call(entries, String(tabId))) {
+      return;
+    }
+
+    delete entries[String(tabId)];
+    if (Object.keys(entries).length > 0) {
+      await chrome.storage.session.set({
+        [PREVIEW_SESSION_STORAGE_KEY]: entries
+      });
+      return;
+    }
+
+    await chrome.storage.session.remove(PREVIEW_SESSION_STORAGE_KEY);
+  } catch (err) {
+    logWarn("preview_session_cache_clear_failed", {
+      tabId,
+      error: toErrorDetails(err)
+    });
+  }
+}
+
+async function clearAllSessionCachedPreviews() {
+  try {
+    await chrome.storage.session.remove(PREVIEW_SESSION_STORAGE_KEY);
+  } catch (err) {
+    logWarn("preview_session_cache_reset_failed", {
+      error: toErrorDetails(err)
+    });
+  }
 }
 
 function getCachedPreview(cacheKey) {
@@ -643,6 +847,10 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 12000) {
     });
 
     const contentType = response.headers.get("content-type") || "";
+    const retryAfterValue = response.headers.get("retry-after") || "";
+    const retryAfterSeconds = /^\d+$/.test(retryAfterValue.trim())
+      ? Number(retryAfterValue.trim())
+      : null;
     const body = contentType.includes("application/json")
       ? await response.json()
       : await response.text();
@@ -654,7 +862,8 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 12000) {
         {
           status: response.status,
           url,
-          response: body
+          response: body,
+          retryAfterSeconds
         }
       );
     }
@@ -1295,6 +1504,7 @@ async function createFullProfileCrawlJob(user, tabUrl, settings) {
     nextCursor: initialTimeline.nextCursor || null,
     pendingShortcodes,
     profileMediaFilter: settings.profileMediaFilter,
+    fullCrawlPace: settings.fullCrawlPace,
     duplicateMode: settings.duplicateMode,
     batchesCompleted: 0,
     totalPostsResolved: 0,
@@ -1302,12 +1512,14 @@ async function createFullProfileCrawlJob(user, tabUrl, settings) {
     totalMediaQueued: 0,
     totalMediaSkipped: 0,
     totalMediaFailed: 0,
+    resumeAfter: null,
+    rateLimitCount: 0,
     lastError: null,
     lastBatch: null
   };
 }
 
-async function collectFullProfileCrawlBatch(job, tabUrl) {
+async function collectFullProfileCrawlBatch(job, tabUrl, settings) {
   const selectedShortcodes = [];
   const pendingShortcodes = Array.isArray(job.pendingShortcodes) ? [...job.pendingShortcodes] : [];
   let nextCursor = job.nextCursor || null;
@@ -1327,6 +1539,7 @@ async function collectFullProfileCrawlBatch(job, tabUrl) {
     pagesFetched < FULL_PROFILE_CRAWL_PAGE_FETCH_LIMIT
   ) {
     try {
+      await pauseForFullCrawlStep(settings, "pageFetchDelayRangeMs");
       const page = await fetchProfileTimelinePage(job.userId, nextCursor, tabUrl);
       pagesFetched += 1;
       pendingShortcodes.push(...page.shortcodes);
@@ -1567,9 +1780,20 @@ async function resolveProfileBatchPlanFromShortcodes(tabUrl, job, shortcodes, se
   const failedPosts = [];
   const remainingShortcodes = [];
   let rateLimitError = null;
+  let stopRequested = false;
 
   for (let index = 0; index < shortcodes.length; index += 1) {
+    if (isFullProfileCrawlStopRequested(job.username)) {
+      stopRequested = true;
+      remainingShortcodes.push(...shortcodes.slice(index));
+      break;
+    }
+
     const shortcode = shortcodes[index];
+    if (index > 0) {
+      await pauseForFullCrawlStep(settings, "postResolveDelayRangeMs");
+    }
+
     if (progressCallback) {
       await progressCallback({
         current: index + 1,
@@ -1642,7 +1866,8 @@ async function resolveProfileBatchPlanFromShortcodes(tabUrl, job, shortcodes, se
     failedPosts,
     processedPostCount,
     remainingShortcodes,
-    rateLimitError
+    rateLimitError,
+    stopRequested
   };
 }
 
@@ -2357,6 +2582,7 @@ async function sendToast(tabId, message, level = "info") {
 function buildSummary(plan) {
   const imageCount = plan.items.filter((item) => item.type === "image").length;
   const videoCount = plan.items.filter((item) => item.type === "video").length;
+  const isFullCrawl = plan.meta.source === "instagram_profile_full_crawl";
 
   return {
     username: plan.meta.username,
@@ -2364,7 +2590,8 @@ function buildSummary(plan) {
     pageKind: plan.meta.pageKind,
     imageCount,
     videoCount,
-    totalCount: plan.items.length
+    totalCount: plan.items.length,
+    isFullCrawl
   };
 }
 
@@ -2380,6 +2607,7 @@ function buildPlanPreview(plan, settings, knownDownloadKeys = new Set()) {
     height: entry.item.height,
     timestamp: entry.item.timestamp,
     expiresAt: entry.item.expiresAt || null,
+    downloadKey: entry.downloadKey || null,
     alreadyDownloaded: entry.alreadyDownloaded
   }));
 
@@ -2411,6 +2639,42 @@ function buildPlanPreview(plan, settings, knownDownloadKeys = new Set()) {
   };
 }
 
+async function hydrateCachedPreview(preview, settings) {
+  if (!preview) return null;
+
+  let items = Array.isArray(preview.items) ? preview.items : [];
+  if (settings.duplicateMode === "history") {
+    const knownDownloadKeys = await getKnownDownloadKeys();
+    items = items.map((item) => ({
+      ...item,
+      alreadyDownloaded: item.downloadKey
+        ? knownDownloadKeys.has(item.downloadKey)
+        : Boolean(item.alreadyDownloaded)
+    }));
+  } else {
+    items = items.map((item) => ({
+      ...item,
+      alreadyDownloaded: false
+    }));
+  }
+
+  const duplicateCount = items.filter((item) => item.alreadyDownloaded).length;
+  const summary = {
+    ...preview.summary,
+    duplicateCount,
+    duplicateMode: settings.duplicateMode
+  };
+
+  return {
+    ...preview,
+    summary,
+    items,
+    crawlJob: summary.pageKind === "profile"
+      ? summarizeCrawlJob(await getCrawlJob(preview.meta.username || summary.username))
+      : null
+  };
+}
+
 async function getPagePreview(tab) {
   const tabUrl = tab?.url || "";
   if (!tab?.id || !isInstagramUrl(tabUrl)) {
@@ -2425,12 +2689,13 @@ async function getPagePreview(tab) {
   const cacheKey = buildPreviewCacheKey(tabUrl, settings);
   const cachedPreview = getCachedPreview(cacheKey);
   if (cachedPreview) {
-    return {
-      ...cachedPreview,
-      crawlJob: cachedPreview.summary.pageKind === "profile"
-        ? summarizeCrawlJob(await getCrawlJob(cachedPreview.meta.username || cachedPreview.summary.username))
-        : null
-    };
+    return hydrateCachedPreview(cachedPreview, settings);
+  }
+
+  const sessionCachedPreview = await getSessionCachedPreview(tab.id, cacheKey, tabUrl);
+  if (sessionCachedPreview) {
+    setCachedPreview(cacheKey, sessionCachedPreview);
+    return hydrateCachedPreview(sessionCachedPreview, settings);
   }
 
   const resolvedPlan = await resolveDownloadPlan(tabUrl, settings);
@@ -2448,6 +2713,7 @@ async function getPagePreview(tab) {
     preview.crawlJob = summarizeCrawlJob(await getCrawlJob(plan.meta.username));
   }
   setCachedPreview(cacheKey, preview);
+  await setSessionCachedPreview(tab.id, cacheKey, tabUrl, preview);
   return preview;
 }
 
@@ -2505,6 +2771,41 @@ async function getProfileCrawlStatus(tab) {
   };
 }
 
+async function stopFullProfileCrawl(tab) {
+  const tabUrl = tab?.url || "";
+  const descriptor = parseInstagramUrl(tabUrl);
+  if (descriptor.kind !== "profile") {
+    throw new InstagramResolverError(
+      "unsupported_url",
+      "Open an Instagram profile page before stopping a full crawl job.",
+      { tabUrl }
+    );
+  }
+
+  const crawlJob = await getCrawlJob(descriptor.username);
+  if (!crawlJob) {
+    return {
+      ok: true,
+      stopped: false,
+      crawlJob: null
+    };
+  }
+
+  requestFullProfileCrawlStop(crawlJob.username);
+  const nextJob = {
+    ...crawlJob,
+    status: isFullProfileCrawlActive(crawlJob.username) ? "stopping" : "paused",
+    updatedAt: new Date().toISOString(),
+    lastError: null
+  };
+  await saveCrawlJob(nextJob);
+  return {
+    ok: true,
+    stopped: true,
+    crawlJob: summarizeCrawlJob(nextJob)
+  };
+}
+
 async function resetFullProfileCrawl(tab) {
   const tabUrl = tab?.url || "";
   const descriptor = parseInstagramUrl(tabUrl);
@@ -2522,7 +2823,7 @@ async function resetFullProfileCrawl(tab) {
   };
 }
 
-async function runFullProfileCrawl(tab) {
+async function runFullProfileCrawl(tab, _options = {}) {
   if (!tab?.id) {
     return { ok: false };
   }
@@ -2540,17 +2841,44 @@ async function runFullProfileCrawl(tab) {
 
   const settings = await getSettings();
   let crawlJob = await getCrawlJob(descriptor.username);
+  const aggregateResult = {
+    requested: 0,
+    downloaded: 0,
+    skipped: 0,
+    failed: 0
+  };
 
   if (!crawlJob || crawlJob.status === "completed") {
     const profileInfo = await fetchProfileInfo(descriptor.username, tabUrl);
     crawlJob = await createFullProfileCrawlJob(profileInfo, tabUrl, settings);
   }
 
+  if (isFullProfileCrawlActive(descriptor.username)) {
+    return {
+      ok: true,
+      alreadyRunning: true,
+      crawlJob: summarizeCrawlJob(crawlJob),
+      result: aggregateResult
+    };
+  }
+
+  if (isCrawlCooldownActive(crawlJob)) {
+    return {
+      ok: true,
+      rateLimited: true,
+      deferred: true,
+      crawlJob: summarizeCrawlJob(crawlJob),
+      result: aggregateResult
+    };
+  }
+
   crawlJob = {
     ...crawlJob,
     pageUrl: tabUrl,
     profileMediaFilter: settings.profileMediaFilter,
+    fullCrawlPace: settings.fullCrawlPace,
     duplicateMode: settings.duplicateMode,
+    resumeAfter: null,
     status: "running",
     updatedAt: new Date().toISOString(),
     lastError: null
@@ -2560,21 +2888,49 @@ async function runFullProfileCrawl(tab) {
   await setBadge(tabId, "CR", BADGE_COLORS.working, `Crawling @${crawlJob.username}`);
   await sendToast(tabId, `Continuing full crawl for @${crawlJob.username}...`, "info");
 
-  const aggregateResult = {
-    requested: 0,
-    downloaded: 0,
-    skipped: 0,
-    failed: 0
-  };
-  let hasConfirmedDownloads = !settings.confirmBeforeDownload;
+  markFullProfileCrawlActive(crawlJob.username);
+  clearFullProfileCrawlStop(crawlJob.username);
 
   try {
     while (true) {
-      const batch = await collectFullProfileCrawlBatch(crawlJob, tabUrl);
+      if (isFullProfileCrawlStopRequested(crawlJob.username)) {
+        clearFullProfileCrawlStop(crawlJob.username);
+        crawlJob = {
+          ...crawlJob,
+          status: "paused",
+          updatedAt: new Date().toISOString(),
+          resumeAfter: null,
+          lastError: null,
+          lastBatch: {
+            processedPosts: 0,
+            resolvedMedia: 0,
+            queued: 0,
+            skipped: 0,
+            failed: 0,
+            pagesFetched: 0,
+            stopReason: "stopped_by_user"
+          }
+        };
+        await saveCrawlJob(crawlJob);
+        await setBadge(tabId, "STOP", BADGE_COLORS.error, `Full crawl paused for @${crawlJob.username}`);
+        await sendToast(tabId, `Full crawl paused for @${crawlJob.username}.`, "info");
+        clearBadgeSoon(tabId, tabUrl, 2400);
+        return {
+          ok: true,
+          stopped: true,
+          crawlJob: summarizeCrawlJob(crawlJob),
+          result: aggregateResult
+        };
+      }
+
+      const batch = await collectFullProfileCrawlBatch(crawlJob, tabUrl, settings);
       const batchPausedForRateLimit = batch.stopReason === "rate_limited";
 
       if (!batch.shortcodes.length) {
         const now = new Date().toISOString();
+        const resumeAfter = batchPausedForRateLimit
+          ? buildRateLimitResumeAfter(batch.rateLimitError, settings)
+          : null;
         crawlJob = {
           ...crawlJob,
           pendingShortcodes: batch.pendingShortcodes,
@@ -2583,6 +2939,10 @@ async function runFullProfileCrawl(tab) {
           status: batchPausedForRateLimit ? "rate_limited" : "completed",
           updatedAt: now,
           completedAt: batchPausedForRateLimit ? null : now,
+          resumeAfter,
+          rateLimitCount: batchPausedForRateLimit
+            ? Number(crawlJob.rateLimitCount || 0) + 1
+            : Number(crawlJob.rateLimitCount || 0),
           lastError: batch.rateLimitError?.message || null,
           lastBatch: {
             processedPosts: 0,
@@ -2626,8 +2986,9 @@ async function runFullProfileCrawl(tab) {
 
       const processedPostCount = Number(batchPlanResult.processedPostCount || 0);
       const resolutionPausedForRateLimit = Boolean(batchPlanResult.rateLimitError);
+      const stoppedByUser = Boolean(batchPlanResult.stopRequested);
       const pausedForRateLimit = batchPausedForRateLimit || resolutionPausedForRateLimit;
-      const preservedShortcodes = resolutionPausedForRateLimit
+      const preservedShortcodes = resolutionPausedForRateLimit || stoppedByUser
         ? mergeShortcodeQueues(batchPlanResult.remainingShortcodes, batch.pendingShortcodes)
         : batch.pendingShortcodes;
       const hasSavedWork = preservedShortcodes.length > 0 || Boolean(batch.hasMore && batch.nextCursor);
@@ -2640,6 +3001,8 @@ async function runFullProfileCrawl(tab) {
             `Processed ${processedPostCount} profile post${processedPostCount === 1 ? "" : "s"} in this crawl batch.`,
             pausedForRateLimit
               ? "Instagram rate limited this crawl batch. Resume later from the saved checkpoint."
+              : stoppedByUser
+                ? "This crawl batch was stopped from the popup and can be resumed later."
               : hasSavedWork
                 ? "Continuing automatically into older profile posts."
                 : "Reached the end of profile pagination in this run."
@@ -2649,42 +3012,6 @@ async function runFullProfileCrawl(tab) {
 
       let result;
       if (plan.items.length > 0) {
-        if (!hasConfirmedDownloads && settings.confirmBeforeDownload) {
-          const confirmed = await requestDownloadConfirmation(tabId, plan);
-          if (!confirmed) {
-            const requeuedShortcodes = mergeShortcodeQueues(batch.shortcodes, batch.pendingShortcodes);
-            crawlJob = {
-              ...crawlJob,
-              status: "paused",
-              updatedAt: new Date().toISOString(),
-              pendingShortcodes: requeuedShortcodes,
-              nextCursor: batch.nextCursor,
-              hasMore: requeuedShortcodes.length > 0 || Boolean(batch.hasMore && batch.nextCursor),
-              completedAt: null,
-              lastError: null,
-              lastBatch: {
-                processedPosts: 0,
-                resolvedMedia: 0,
-                queued: 0,
-                skipped: 0,
-                failed: 0,
-                pagesFetched: batch.pagesFetched,
-                stopReason: "cancelled_before_download"
-              }
-            };
-            await saveCrawlJob(crawlJob);
-            await setBadge(tabId, "CAN", BADGE_COLORS.error, "Full crawl paused");
-            clearBadgeSoon(tabId, tabUrl, 2200);
-            return {
-              ok: false,
-              cancelled: true,
-              crawlJob: summarizeCrawlJob(crawlJob)
-            };
-          }
-
-          hasConfirmedDownloads = true;
-        }
-
         result = await queueDownloads(plan, settings);
         if (settings.exportBatchReport) {
           try {
@@ -2727,14 +3054,22 @@ async function runFullProfileCrawl(tab) {
       aggregateResult.failed += Number(result.failed || 0);
 
       const now = new Date().toISOString();
+      const rateLimitError = batchPlanResult.rateLimitError || batch.rateLimitError || null;
+      const resumeAfter = pausedForRateLimit
+        ? buildRateLimitResumeAfter(rateLimitError, settings)
+        : null;
       crawlJob = {
         ...crawlJob,
         pendingShortcodes: preservedShortcodes,
         nextCursor: batch.nextCursor,
         hasMore: hasSavedWork,
-        status: pausedForRateLimit ? "rate_limited" : hasSavedWork ? "running" : "completed",
+        status: pausedForRateLimit ? "rate_limited" : stoppedByUser ? "paused" : hasSavedWork ? "running" : "completed",
         updatedAt: now,
-        completedAt: pausedForRateLimit || hasSavedWork ? null : now,
+        completedAt: pausedForRateLimit || stoppedByUser || hasSavedWork ? null : now,
+        resumeAfter: stoppedByUser ? null : resumeAfter,
+        rateLimitCount: pausedForRateLimit
+          ? Number(crawlJob.rateLimitCount || 0) + 1
+          : Number(crawlJob.rateLimitCount || 0),
         batchesCompleted: Number(crawlJob.batchesCompleted || 0) + 1,
         totalPostsResolved: Number(crawlJob.totalPostsResolved || 0) + processedPostCount,
         totalFailedPosts: Number(crawlJob.totalFailedPosts || 0) + Number(batchPlanResult.failedPosts?.length || 0),
@@ -2751,7 +3086,13 @@ async function runFullProfileCrawl(tab) {
           skipped: result.skipped || 0,
           failed: result.failed || 0,
           pagesFetched: batch.pagesFetched,
-          stopReason: pausedForRateLimit ? "rate_limited" : hasSavedWork ? "batch_limit_reached" : "crawl_completed"
+          stopReason: pausedForRateLimit
+            ? "rate_limited"
+            : stoppedByUser
+              ? "stopped_by_user"
+              : hasSavedWork
+                ? "batch_limit_reached"
+                : "crawl_completed"
         }
       };
       await saveCrawlJob(crawlJob);
@@ -2768,6 +3109,19 @@ async function runFullProfileCrawl(tab) {
         };
       }
 
+      if (stoppedByUser) {
+        clearFullProfileCrawlStop(crawlJob.username);
+        await setBadge(tabId, "STOP", BADGE_COLORS.error, `Full crawl paused for @${crawlJob.username}`);
+        await sendToast(tabId, `Full crawl paused for @${crawlJob.username}.`, "info");
+        clearBadgeSoon(tabId, tabUrl, 2400);
+        return {
+          ok: true,
+          stopped: true,
+          crawlJob: summarizeCrawlJob(crawlJob),
+          result: aggregateResult
+        };
+      }
+
       if (!hasSavedWork) {
         await setBadge(tabId, "OK", BADGE_COLORS.success, `Full crawl complete for @${crawlJob.username}`);
         await sendToast(tabId, `Full crawl completed for @${crawlJob.username}.`, "success");
@@ -2778,6 +3132,8 @@ async function runFullProfileCrawl(tab) {
           result: aggregateResult
         };
       }
+
+      await pauseForFullCrawlStep(settings, "batchDelayRangeMs");
     }
   } catch (err) {
     crawlJob = {
@@ -2788,6 +3144,11 @@ async function runFullProfileCrawl(tab) {
     };
     await saveCrawlJob(crawlJob);
     throw err;
+  } finally {
+    clearFullProfileCrawlActive(crawlJob.username);
+    if (crawlJob.status !== "stopping") {
+      clearFullProfileCrawlStop(crawlJob.username);
+    }
   }
 }
 
@@ -2966,6 +3327,11 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
 
   previewCache.clear();
+  clearAllSessionCachedPreviews().catch((err) => {
+    logWarn("preview_session_cache_sync_reset_failed", {
+      error: toErrorDetails(err)
+    });
+  });
 
   if (changes.easyMode) {
     syncActionPresentation().catch((err) => {
@@ -3001,6 +3367,16 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url) {
+    previewCache.clear();
+    clearSessionCachedPreviewForTab(tabId).catch((err) => {
+      logWarn("preview_session_cache_tab_update_clear_failed", {
+        tabId,
+        error: toErrorDetails(err)
+      });
+    });
+  }
+
   if (!changeInfo.url && changeInfo.status !== "complete") {
     return;
   }
@@ -3014,6 +3390,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   clearTimeout(badgeRefreshTimers.get(tabId));
   badgeRefreshTimers.delete(tabId);
+  clearSessionCachedPreviewForTab(tabId).catch((err) => {
+    logWarn("preview_session_cache_tab_remove_clear_failed", {
+      tabId,
+      error: toErrorDetails(err)
+    });
+  });
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -3037,6 +3419,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === "GET_PROFILE_CRAWL_STATUS") {
     getProfileCrawlStatus({ id: message.tabId, url: message.tabUrl })
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ ok: false, error: getErrorPresentation(err) }));
+    return true;
+  }
+
+  if (message.type === "STOP_FULL_PROFILE_CRAWL") {
+    stopFullProfileCrawl({ id: message.tabId, url: message.tabUrl })
       .then((result) => sendResponse(result))
       .catch((err) => sendResponse({ ok: false, error: getErrorPresentation(err) }));
     return true;

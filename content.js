@@ -50,14 +50,24 @@ function buildConfirmMessage(summary) {
   const totalCount = Number(summary?.totalCount || 0);
   const imageCount = Number(summary?.imageCount || 0);
   const videoCount = Number(summary?.videoCount || 0);
-
-  return [
+  const lines = [
     `Download ${totalCount} file${totalCount === 1 ? "" : "s"} from ${username}?`,
     "",
     `Type: ${kind}`,
     `Images: ${imageCount}`,
     `Videos: ${videoCount}`
-  ].join("\n");
+  ];
+
+  if (summary?.isFullCrawl) {
+    lines.push(
+      "",
+      "This starts the full-profile crawl.",
+      "The extension popup may close after this prompt.",
+      "The crawl will keep running in the background until the profile ends or Instagram rate limits it."
+    );
+  }
+
+  return lines.join("\n");
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

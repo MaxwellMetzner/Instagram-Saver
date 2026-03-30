@@ -2,15 +2,16 @@ const DEFAULT_SETTINGS = {
   themeMode: "light",
   easyMode: false,
   confirmBeforeDownload: true,
-  saveMetadataSidecar: true,
+  saveMetadataSidecar: false,
   placeMetadataInSubfolder: false,
   exportBatchReport: false,
   exportPostComments: false,
-  promptForSingleDownload: true,
+  promptForSingleDownload: false,
   duplicateMode: "history",
   skipExistingDownloads: true,
   maxProfilePosts: 24,
   profileMediaFilter: "all",
+  fullCrawlPace: "aggressive",
   folderTemplate: "instagram/{username}",
   filenameTemplate: "{username}_{id}_{index}",
   metadataFilenameTemplate: "{username}_{id}_metadata"
@@ -20,6 +21,7 @@ const form = document.getElementById("settings-form");
 const statusEl = document.getElementById("status");
 const exportHistoryButton = document.getElementById("export-history-button");
 const clearHistoryButton = document.getElementById("clear-history-button");
+const resetDefaultsButton = document.getElementById("reset-defaults-button");
 const themeModeField = document.getElementById("themeMode");
 
 function applyTheme(themeMode) {
@@ -47,7 +49,10 @@ async function loadSettings() {
       ? settings.duplicateMode
       : settings.skipExistingDownloads === false
         ? "none"
-        : "history"
+        : "history",
+    fullCrawlPace: settings.fullCrawlPace === "faster"
+      ? "aggressive"
+      : settings.fullCrawlPace || DEFAULT_SETTINGS.fullCrawlPace
   };
 
   applyTheme(resolvedSettings.themeMode);
@@ -115,6 +120,17 @@ async function clearHistory() {
   setStatus("History cleared.");
 }
 
+async function resetDefaults() {
+  const confirmed = window.confirm("Reset all saved settings to the app defaults?");
+  if (!confirmed) {
+    return;
+  }
+
+  await chrome.storage.sync.set(DEFAULT_SETTINGS);
+  await loadSettings();
+  setStatus("Defaults restored.");
+}
+
 form.addEventListener("submit", saveSettings);
 exportHistoryButton.addEventListener("click", () => {
   exportHistory().catch((error) => {
@@ -126,6 +142,12 @@ clearHistoryButton.addEventListener("click", () => {
   clearHistory().catch((error) => {
     console.error("[InstagramSaver] Failed to clear history", error);
     setStatus("Failed to clear history.");
+  });
+});
+resetDefaultsButton.addEventListener("click", () => {
+  resetDefaults().catch((error) => {
+    console.error("[InstagramSaver] Failed to reset defaults", error);
+    setStatus("Failed to reset defaults.");
   });
 });
 

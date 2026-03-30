@@ -87,6 +87,7 @@
         border-radius: 32px;
         box-shadow: var(--shadow);
         padding: 32px;
+        -webkit-backdrop-filter: blur(14px);
         backdrop-filter: blur(14px);
       }
 
@@ -439,7 +440,7 @@
                   <input id="confirmBeforeDownload" name="confirmBeforeDownload" type="checkbox">
                   <div>
                     <label for="confirmBeforeDownload">Confirm before starting a download</label>
-                    <small>Shows a confirmation prompt summarizing the files about to be saved.</small>
+                    <small>Shows a confirmation prompt for direct downloads. Full-profile crawls begin immediately.</small>
                   </div>
                 </div>
 
@@ -482,6 +483,16 @@
                     <option value="videos">Download videos only from profiles</option>
                   </select>
                   <small>Applies only on Instagram profile pages. Posts, reels, stories, and highlights keep their native media mix.</small>
+                </div>
+
+                <div class="field">
+                  <label for="fullCrawlPace">Full crawl pace</label>
+                  <select id="fullCrawlPace" name="fullCrawlPace">
+                    <option value="safer">Safer and slower</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="aggressive">Aggressive</option>
+                  </select>
+                  <small>Applies only to full-profile crawls. Slower pacing spaces out Instagram requests more aggressively, while aggressive pacing runs faster but is more likely to hit Instagram throttling.</small>
                 </div>
               </div>
             </section>
@@ -578,6 +589,7 @@
 
           <div class="actions">
             <button type="submit">Save settings</button>
+            <button class="button-ghost" id="reset-defaults-button" type="button">Reset to defaults</button>
             <div id="status" role="status" aria-live="polite"></div>
           </div>
         </form>
