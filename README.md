@@ -25,6 +25,18 @@ Instagram Saver is a Chrome extension for downloading media from Instagram pages
 
 On profile pages, the popup can also start or resume a larger crawl. The extension keeps moving through saved 48-post checkpoints automatically, spaces out full-crawl requests according to the selected crawl pace, and only relies on the stored cursor when a crawl is interrupted, cancelled, or rate limited.
 
+## Screenshots
+
+The popup adjusts its actions and status based on the Instagram page you have open.
+
+| Post | Reel | Story |
+| --- | --- | --- |
+| ![Post download view](screenshots/post.jpg) | ![Reel download view](screenshots/reels.jpg) | ![Story download view](screenshots/story.jpg) |
+
+| Highlight | Profile Crawl |
+| --- | --- |
+| ![Highlight download view](screenshots/highlight.jpg) | ![Profile crawl view](screenshots/profile.jpg) |
+
 ## Settings
 
 The options page includes:
