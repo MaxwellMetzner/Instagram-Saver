@@ -2,6 +2,7 @@ const MENU_ID_PAGE = "save-instagram-page-media";
 const LOG_PREFIX = "[InstagramSaver]";
 const INSTAGRAM_SHORTCODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const INSTAGRAM_GRAPHQL_DOC_ID = "8845758582119845";
+const INSTAGRAM_WEB_API_BASE_URL = "https://www.instagram.com/api/v1";
 const DEFAULT_ACTION_TITLE = "Download media from the current Instagram page";
 const DEFAULT_POPUP_PATH = "popup.html";
 const BADGE_REFRESH_DELAY_MS = 350;
@@ -273,7 +274,7 @@ function instagramShortcodeToPk(shortcode) {
 function getInstagramApiHeaders(refererUrl) {
   return {
     "X-IG-App-ID": "936619743392459",
-    "X-ASBD-ID": "198387",
+    "X-ASBD-ID": "359341",
     "X-IG-WWW-Claim": "0",
     "X-Requested-With": "XMLHttpRequest",
     Origin: "https://www.instagram.com",
@@ -951,7 +952,7 @@ async function ensureInstagramSession(tabUrl, pk) {
 
   try {
     await fetchJsonWithTimeout(
-      `https://i.instagram.com/api/v1/web/get_ruling_for_content/?content_type=MEDIA&target_id=${encodeURIComponent(pk)}`,
+      `${INSTAGRAM_WEB_API_BASE_URL}/web/get_ruling_for_content/?content_type=MEDIA&target_id=${encodeURIComponent(pk)}`,
       {
         headers: getInstagramApiHeaders(tabUrl)
       },
@@ -1106,7 +1107,7 @@ async function resolvePostPlan(tabUrl, descriptor) {
 
   try {
     const infoData = await fetchJsonWithTimeout(
-      `https://i.instagram.com/api/v1/media/${encodeURIComponent(pk)}/info/`,
+      `${INSTAGRAM_WEB_API_BASE_URL}/media/${encodeURIComponent(pk)}/info/`,
       {
         headers: getInstagramApiHeaders(tabUrl)
       }
@@ -1161,7 +1162,7 @@ async function resolvePostPlan(tabUrl, descriptor) {
 }
 
 async function lookupUserIdByUsername(username, tabUrl) {
-  const url = new URL("https://i.instagram.com/api/v1/users/web_profile_info/");
+  const url = new URL(`${INSTAGRAM_WEB_API_BASE_URL}/users/web_profile_info/`);
   url.searchParams.set("username", username);
   const data = await fetchJsonWithTimeout(url.href, {
     headers: getInstagramApiHeaders(tabUrl)
@@ -1178,7 +1179,7 @@ async function lookupUserIdByUsername(username, tabUrl) {
 }
 
 async function fetchProfileInfo(username, tabUrl) {
-  const url = new URL("https://i.instagram.com/api/v1/users/web_profile_info/");
+  const url = new URL(`${INSTAGRAM_WEB_API_BASE_URL}/users/web_profile_info/`);
   url.searchParams.set("username", username);
   const data = await fetchJsonWithTimeout(url.href, {
     headers: getInstagramApiHeaders(tabUrl)
@@ -1393,7 +1394,7 @@ async function fetchProfilePageShortcodes(tabUrl, username, requestedCount) {
 }
 
 async function fetchProfileTimelinePage(userId, afterCursor, tabUrl, pageSize = 12) {
-  const feedUrl = new URL(`https://i.instagram.com/api/v1/feed/user/${encodeURIComponent(userId)}/`);
+  const feedUrl = new URL(`${INSTAGRAM_WEB_API_BASE_URL}/feed/user/${encodeURIComponent(userId)}/`);
   feedUrl.searchParams.set("count", String(pageSize));
   if (afterCursor) {
     feedUrl.searchParams.set("max_id", afterCursor);
@@ -1945,7 +1946,7 @@ async function resolveStoryPlan(tabUrl, descriptor) {
     ? `highlight:${descriptor.highlightId}`
     : await lookupUserIdByUsername(descriptor.username, tabUrl);
 
-  const reelsUrl = new URL("https://i.instagram.com/api/v1/feed/reels_media/");
+  const reelsUrl = new URL(`${INSTAGRAM_WEB_API_BASE_URL}/feed/reels_media/`);
   reelsUrl.searchParams.set("reel_ids", reelId);
   const data = await fetchJsonWithTimeout(reelsUrl.href, {
     headers: getInstagramApiHeaders(tabUrl)
@@ -2185,7 +2186,7 @@ async function fetchPostComments(postPk, tabUrl) {
     return [];
   }
 
-  const commentsUrl = new URL(`https://i.instagram.com/api/v1/media/${encodeURIComponent(postPk)}/comments/`);
+  const commentsUrl = new URL(`${INSTAGRAM_WEB_API_BASE_URL}/media/${encodeURIComponent(postPk)}/comments/`);
   commentsUrl.searchParams.set("can_support_threading", "true");
   commentsUrl.searchParams.set("permalink_enabled", "false");
 
