@@ -40,6 +40,46 @@ test("profile page extraction supports route-provided ids and username-prefixed 
   assert.match(backgroundSource, /pathSegments\[1\]/);
 });
 
+test("saved all-posts and collection URLs use separately scoped saved-feed pagination", () => {
+  assert.match(backgroundSource, /parts\[1\] === "saved"/);
+  assert.match(backgroundSource, /parts\[2\] === "all-posts"/);
+  assert.match(backgroundSource, /collectionId: parts\[3\]/);
+  assert.match(backgroundSource, /\/feed\/saved\/posts\//);
+  assert.match(backgroundSource, /\/feed\/collection\/\$\{encodeURIComponent\(collectionId\)\}\/posts\//);
+  assert.match(backgroundSource, /saved:\$\{descriptor\.username\}:\$\{collection\}/);
+  assert.match(backgroundSource, /fetchSavedPostsPage\(\s*descriptor\.collectionId/);
+});
+
+test("saved page URLs parse all-posts and collection identifiers", () => {
+  const parserSource = backgroundSource.match(
+    /function parseInstagramUrl\(url\) \{[\s\S]*?\n\}/
+  )?.[0];
+  assert.ok(parserSource);
+
+  const parseInstagramUrl = new Function(`${parserSource}; return parseInstagramUrl;`)();
+  assert.deepEqual(
+    parseInstagramUrl("https://www.instagram.com/maxmetzner/saved/all-posts/"),
+    { kind: "saved", username: "maxmetzner", collectionId: null }
+  );
+  assert.deepEqual(
+    parseInstagramUrl("https://www.instagram.com/maxmetzner/saved/cool/18040676807565133/"),
+    {
+      kind: "saved",
+      username: "maxmetzner",
+      collectionId: "18040676807565133",
+      collectionName: "Cool"
+    }
+  );
+});
+
+test("saved post batches and resumable crawls share post resolution without merging profile checkpoints", () => {
+  assert.match(backgroundSource, /async function resolveSavedPlan/);
+  assert.match(backgroundSource, /pageKind: "saved"/);
+  assert.match(backgroundSource, /scope: "saved"/);
+  assert.match(backgroundSource, /job\.scope === "saved"\s*\?\s*await fetchSavedPostsPage/);
+  assert.match(backgroundSource, /descriptor\.kind === "saved"\)\s*\{\s*crawlJob = await createFullSavedCrawlJob/);
+});
+
 test("story URLs resolve all current story items instead of filtering to the URL item", () => {
   const storyPlan = backgroundSource.match(/function buildStoryPlan\(reel, descriptor, source\) \{([\s\S]*?)\n\}/)?.[1];
   assert.ok(storyPlan);

@@ -102,25 +102,26 @@ function updateActionTooltips(preview = null) {
   const summary = preview?.summary || null;
   const crawlJob = preview?.crawlJob || null;
 
-  if (summary?.pageKind === "profile") {
+  if (summary?.pageKind === "profile" || summary?.pageKind === "saved") {
+    const pageLabel = summary.pageKind === "saved" ? "saved page" : "profile";
     const maxProfilePosts = Math.max(1, Number(summary?.maxProfilePosts || 0)) || 1;
     const profileMediaFilter = formatProfileMediaFilterText(summary?.profileMediaFilter || crawlJob?.profileMediaFilter || "all");
     const postLabel = maxProfilePosts === 1 ? "post" : "posts";
 
-    downloadButton.title = `Downloads only the current profile preview: up to ${maxProfilePosts} ${postLabel} using ${profileMediaFilter}. This is a one-time batch and does not continue into older posts.`;
+    downloadButton.title = `Downloads only the current ${pageLabel} preview: up to ${maxProfilePosts} ${postLabel} using ${profileMediaFilter}. This is a one-time batch and does not continue into older posts.`;
 
     if (!crawlJob) {
-      crawlButton.title = "Starts a full-profile crawl that keeps paging into older posts automatically. It saves a checkpoint only if the crawl is interrupted or Instagram rate limits the session.";
+      crawlButton.title = `Starts a full ${pageLabel} crawl that keeps paging through posts automatically. It saves a checkpoint if the crawl is interrupted or Instagram rate limits the session.`;
       return;
     }
 
     if (crawlJob.status === "completed") {
-      crawlButton.title = "Starts a fresh full-profile crawl from the beginning. It will keep paging automatically until the profile ends or Instagram rate limits the session.";
+      crawlButton.title = `Starts a fresh full ${pageLabel} crawl from the beginning. It will keep paging until the posts end or Instagram rate limits the session.`;
       return;
     }
 
     if (crawlJob.status === "running") {
-      crawlButton.title = "Stops the active full-profile crawl after the current work finishes and keeps the saved checkpoint.";
+      crawlButton.title = "Stops the active full crawl after the current work finishes and keeps the saved checkpoint.";
       return;
     }
 
@@ -133,17 +134,17 @@ function updateActionTooltips(preview = null) {
       const resumeAfterText = formatResumeAfterText(crawlJob.resumeAfter);
       const cooldownActive = Boolean(getResumeTimestamp(crawlJob.resumeAfter) && getResumeTimestamp(crawlJob.resumeAfter) > Date.now());
       crawlButton.title = cooldownActive && resumeAfterText
-        ? `Resumes the saved full-profile crawl after the current cooldown ends at ${resumeAfterText}.`
-        : "Resumes the saved full-profile crawl from the last checkpoint after Instagram rate limited the session.";
+        ? `Resumes the saved full ${pageLabel} crawl after the current cooldown ends at ${resumeAfterText}.`
+        : "Resumes the saved full crawl from the last checkpoint after Instagram rate limited the session.";
       return;
     }
 
-    crawlButton.title = "Resumes the saved full-profile crawl from the last checkpoint. It keeps paging automatically until the profile ends or Instagram rate limits the session.";
+    crawlButton.title = `Resumes the saved full ${pageLabel} crawl from the last checkpoint. It keeps paging until the posts end or Instagram rate limits the session.`;
     return;
   }
 
   downloadButton.title = "Download the media resolved for the current Instagram page.";
-  crawlButton.title = "Attempt the full profile in one run, saving progress if the crawl is interrupted, paused, or rate limited.";
+  crawlButton.title = "Attempt a full page crawl, saving progress if the crawl is interrupted, paused, or rate limited.";
 }
 
 function isDuplicateErrorText(candidate, seenValues) {
@@ -153,11 +154,11 @@ function isDuplicateErrorText(candidate, seenValues) {
 
 function renderCrawlJob(preview) {
   const crawlJob = preview?.crawlJob || null;
-  const isProfile = preview?.summary?.pageKind === "profile";
+  const supportsCrawl = ["profile", "saved"].includes(preview?.summary?.pageKind);
 
-  crawlButton.classList.toggle("hidden", !isProfile);
+  crawlButton.classList.toggle("hidden", !supportsCrawl);
 
-  if (!isProfile) {
+  if (!supportsCrawl) {
     crawlSummaryEl.classList.add("hidden");
     crawlStatusActionsEl.classList.add("hidden");
     crawlDiagnosticsBlock.classList.add("hidden");
@@ -189,6 +190,8 @@ function renderCrawlJob(preview) {
   crawlSummaryEl.textContent = crawlJob.statusLine;
 
   crawlDiagnosticsListEl.replaceChildren();
+  const savedPostsCrawl = preview.summary.pageKind === "saved";
+  const contentLabel = savedPostsCrawl ? "saved posts" : "profile posts";
   const checkpointLine = crawlJob.status === "stopping"
     ? "Stop requested. The crawl will pause after the current work finishes."
     : crawlJob.status === "rate_limited"
@@ -200,12 +203,12 @@ function renderCrawlJob(preview) {
       : crawlJob.lastBatch?.stopReason === "stopped_by_user"
         ? "The crawl was stopped manually and can be resumed from the saved checkpoint."
       : crawlJob.hasMore
-        ? "More profile pages remain after the saved cursor."
-        : "Saved cursor is at the end of the profile.";
+        ? `More ${contentLabel} remain after the saved cursor.`
+        : `Saved cursor is at the end of the ${savedPostsCrawl ? "saved page" : "profile"}.`;
   const diagnostics = [
     `Status: ${crawlJob.status}.`,
     `Posts processed: ${crawlJob.totalPostsResolved}.`,
-    `Pending saved shortcodes: ${crawlJob.pendingShortcodes}.`,
+    `Pending saved post identifiers: ${crawlJob.pendingShortcodes}.`,
     `Crawl pace: ${formatFullCrawlPaceText(crawlJob.fullCrawlPace)}.`,
     checkpointLine,
     crawlJob.lastBatch
@@ -455,13 +458,13 @@ async function startFullCrawl() {
     renderError(response?.error || {
       title: "Full crawl failed",
       message: "Unknown error.",
-      suggestion: "Try again after reloading the profile page."
+      suggestion: "Try again after reloading the Instagram page."
     });
   } catch (error) {
     renderError({
       title: "Full crawl failed",
       message: String(error?.message || error),
-      suggestion: "Try again after reloading the profile page."
+      suggestion: "Try again after reloading the Instagram page."
     });
   } finally {
     setBusy(false);
@@ -503,7 +506,8 @@ async function resetFullCrawl() {
     return;
   }
 
-  const confirmed = window.confirm("Reset the saved full crawl job for this profile?");
+  const pageLabel = currentPreview?.summary?.pageKind === "saved" ? "saved page" : "profile";
+  const confirmed = window.confirm(`Reset the saved full crawl job for this ${pageLabel}?`);
   if (!confirmed) {
     return;
   }

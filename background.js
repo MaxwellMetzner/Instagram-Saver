@@ -367,6 +367,15 @@ function getCrawlJobKey(username) {
   return String(username || "").trim().toLowerCase();
 }
 
+function getCrawlScopeKey(descriptor) {
+  if (descriptor.kind === "saved") {
+    const collection = descriptor.collectionId ? `collection:${descriptor.collectionId}` : "all";
+    return `saved:${descriptor.username}:${collection}`;
+  }
+
+  return descriptor.username;
+}
+
 async function getCrawlJob(username) {
   if (!username) return null;
   const state = await getDownloadState();
@@ -377,7 +386,7 @@ async function saveCrawlJob(job) {
   const state = await getDownloadState();
   const crawlJobs = {
     ...state.crawlJobs,
-    [getCrawlJobKey(job.username)]: job
+    [getCrawlJobKey(job.crawlKey || job.username)]: job
   };
   await saveDownloadState(state.downloadHistory, state.downloadedMediaKeys, crawlJobs);
   return job;
@@ -393,7 +402,8 @@ async function removeCrawlJob(username) {
 function summarizeCrawlJob(job) {
   if (!job) return null;
 
-  let moreText = job.hasMore ? "More profile pages remain." : "Profile crawl is at the end of pagination.";
+  const contentLabel = job.scope === "saved" ? "saved posts" : "profile pages";
+  let moreText = job.hasMore ? `More ${contentLabel} remain.` : `Crawl is at the end of ${contentLabel}.`;
   if (job.status === "rate_limited" || job.lastBatch?.stopReason === "rate_limited") {
     moreText = "Instagram rate limited the crawl. Resume later from the saved checkpoint.";
   } else if (job.lastBatch?.stopReason === "cancelled_before_download") {
@@ -454,24 +464,25 @@ function formatProfileMediaFilterLabel(profileMediaFilter) {
   return "all media";
 }
 
-function describeProfilePaginationStopReason(stopReason) {
+function describeProfilePaginationStopReason(stopReason, savedPosts = false) {
+  const posts = savedPosts ? "saved posts" : "profile posts";
   const reasonMap = {
-    requested_limit_reached: "Stopped because the requested profile-post limit was reached.",
-    instagram_reported_end: "Stopped because Instagram reported there were no more profile pages.",
+    requested_limit_reached: `Stopped because the requested ${posts} limit was reached.`,
+    instagram_reported_end: `Stopped because Instagram reported there were no more ${posts} pages.`,
     missing_end_cursor: "Stopped because Instagram reported more pages but did not return a next cursor.",
-    pagination_error: "Stopped because Instagram returned an error while fetching more profile pages.",
+    pagination_error: `Stopped because Instagram returned an error while fetching more ${posts} pages.`,
     rate_limited: "Stopped because Instagram rate-limited the crawl. Resume later from the saved checkpoint.",
     stopped_by_user: "Stopped because the crawl was paused manually from the popup.",
     iteration_cap: "Stopped after the extension's pagination safety cap was reached.",
-    batch_limit_reached: "Stopped after the current crawl batch filled up while more profile pages remained.",
-    crawl_completed: "Stopped because the full profile crawl reached the end of profile pagination.",
-    initial_page_sufficient: "Stopped because the initial profile page already satisfied the requested limit.",
-    initial_page_only: "Stopped because Instagram returned only the initial profile page.",
+    batch_limit_reached: `Stopped after the current crawl batch filled up while more ${posts} remained.`,
+    crawl_completed: `Stopped because the full crawl reached the end of ${posts} pagination.`,
+    initial_page_sufficient: `Stopped because the initial page already satisfied the requested ${posts} limit.`,
+    initial_page_only: "Stopped because Instagram returned only the initial page.",
     profile_id_missing: "Stopped because the profile id was missing for additional pagination.",
-    no_profile_cursor: "Stopped because Instagram did not provide a pagination cursor for more profile pages."
+    no_profile_cursor: `Stopped because Instagram did not provide a pagination cursor for more ${posts}.`
   };
 
-  return reasonMap[stopReason] || "Stopped after profile pagination completed.";
+  return reasonMap[stopReason] || `Stopped after ${posts} pagination completed.`;
 }
 
 function shouldReportProfileProgress(current, total) {
@@ -575,22 +586,23 @@ function applyProfileMediaFilter(items, profileMediaFilter) {
 }
 
 function buildProfileBatchDiagnostics(meta) {
-  if (meta.pageKind !== "profile") {
+  if (meta.pageKind !== "profile" && meta.pageKind !== "saved") {
     return [];
   }
 
+  const contentLabel = meta.pageKind === "saved" ? "saved post" : "profile post";
   const diagnostics = [];
   const resolvedPosts = Number(meta.profilePostCount || 0);
   const failedPosts = Number(meta.failedPostCount || 0);
-  diagnostics.push(`Resolved ${resolvedPosts} profile post${resolvedPosts === 1 ? "" : "s"}.`);
-  diagnostics.push(describeProfilePaginationStopReason(meta.pagination?.stopReason));
+  diagnostics.push(`Resolved ${resolvedPosts} ${contentLabel}${resolvedPosts === 1 ? "" : "s"}.`);
+  diagnostics.push(describeProfilePaginationStopReason(meta.pagination?.stopReason, meta.pageKind === "saved"));
 
   if (failedPosts > 0) {
-    diagnostics.push(`${failedPosts} profile post${failedPosts === 1 ? "" : "s"} failed to resolve.`);
+    diagnostics.push(`${failedPosts} ${contentLabel}${failedPosts === 1 ? "" : "s"} failed to resolve.`);
   }
 
   if (meta.profileMediaFilter && meta.profileMediaFilter !== "all") {
-    diagnostics.push(`Applied profile filter: ${formatProfileMediaFilterLabel(meta.profileMediaFilter)}.`);
+    diagnostics.push(`Applied media filter: ${formatProfileMediaFilterLabel(meta.profileMediaFilter)}.`);
   }
 
   if (Number(meta.filteredItemCount || 0) !== Number(meta.unfilteredItemCount || 0)) {
@@ -753,7 +765,7 @@ function getErrorPresentation(err) {
   const presentationByCode = {
     unsupported_url: {
       title: "Unsupported page",
-      suggestion: "Open an Instagram post, reel, story, highlight, or profile first."
+      suggestion: "Open an Instagram post, reel, story, highlight, profile, or saved-posts page first."
     },
     invalid_shortcode: {
       title: "Missing post identifier",
@@ -790,6 +802,14 @@ function getErrorPresentation(err) {
     profile_filter_empty: {
       title: "Profile filter matched nothing",
       suggestion: "Change the profile media filter in settings or open a different profile page."
+    },
+    saved_posts_empty: {
+      title: "No saved posts returned",
+      suggestion: "Make sure the saved page is available to your logged-in account."
+    },
+    saved_posts_unavailable: {
+      title: "Saved posts could not be resolved",
+      suggestion: "The saved page loaded, but its posts could not be converted into downloadable media."
     },
     no_media: {
       title: "No downloadable media found",
@@ -918,6 +938,29 @@ function parseInstagramUrl(url) {
       username: parts[1],
       storyPk: parts[2] || null
     };
+  }
+
+  if (parts.length >= 3 && parts[1] === "saved") {
+    if (parts[2] === "all-posts") {
+      return {
+        kind: "saved",
+        username: parts[0],
+        collectionId: null
+      };
+    }
+
+    if (parts[3] && /^\d+$/.test(parts[3])) {
+      return {
+        kind: "saved",
+        username: parts[0],
+        collectionId: parts[3],
+        collectionName: parts[2]
+          .split("-")
+          .filter(Boolean)
+          .map((part) => `${part[0].toUpperCase()}${part.slice(1)}`)
+          .join(" ")
+      };
+    }
   }
 
   if (parts.length === 1 && /^[A-Za-z0-9._]+$/.test(parts[0])) {
@@ -1612,6 +1655,29 @@ async function fetchProfileTimelinePage(userId, afterCursor, tabUrl, pageSize = 
   };
 }
 
+async function fetchSavedPostsPage(collectionId, afterCursor, tabUrl, pageSize = 12) {
+  const endpoint = collectionId
+    ? `${INSTAGRAM_WEB_API_BASE_URL}/feed/collection/${encodeURIComponent(collectionId)}/posts/`
+    : `${INSTAGRAM_WEB_API_BASE_URL}/feed/saved/posts/`;
+  const feedUrl = new URL(endpoint);
+  feedUrl.searchParams.set("count", String(pageSize));
+  if (afterCursor) {
+    feedUrl.searchParams.set("max_id", afterCursor);
+  }
+
+  const data = await fetchJsonWithTimeout(feedUrl.href, {
+    headers: getInstagramApiHeaders(tabUrl)
+  });
+
+  const shortcodes = extractShortcodesFromProfileFeedResponse(data);
+  const nextCursor = data?.next_max_id || data?.next_cursor || null;
+  return {
+    shortcodes,
+    nextCursor,
+    hasNextPage: Boolean(data?.more_available || nextCursor)
+  };
+}
+
 async function getInitialProfileTimeline(profileInfo, tabUrl, requestedCount) {
   const normalizedProfileInfo = profileInfo?.user
     ? profileInfo
@@ -1709,6 +1775,8 @@ async function createFullProfileCrawlJob(user, tabUrl, settings, pageData = null
 
   return {
     username: profileUser?.username || "instagram",
+    crawlKey: getCrawlJobKey(profileUser?.username || "instagram"),
+    scope: "profile",
     userId: String(profileUser?.id || profileUser?.pk || "") || null,
     pageUrl: tabUrl,
     title: profileUser?.full_name ? `${profileUser.full_name} (@${profileUser.username})` : `@${profileUser?.username || "instagram"}`,
@@ -1723,6 +1791,46 @@ async function createFullProfileCrawlJob(user, tabUrl, settings, pageData = null
     ),
     nextCursor: initialTimeline.nextCursor || null,
     pendingShortcodes,
+    profileMediaFilter: settings.profileMediaFilter,
+    fullCrawlPace: settings.fullCrawlPace,
+    duplicateMode: settings.duplicateMode,
+    batchesCompleted: 0,
+    totalPostsResolved: 0,
+    totalFailedPosts: 0,
+    totalMediaQueued: 0,
+    totalMediaSkipped: 0,
+    totalMediaFailed: 0,
+    resumeAfter: null,
+    rateLimitCount: 0,
+    lastError: null,
+    lastBatch: null
+  };
+}
+
+async function createFullSavedCrawlJob(descriptor, tabUrl, settings) {
+  const initialTimeline = await fetchSavedPostsPage(
+    descriptor.collectionId,
+    null,
+    tabUrl,
+    FULL_PROFILE_CRAWL_POST_BATCH_LIMIT
+  );
+  const collectionName = descriptor.collectionName || (descriptor.collectionId ? "Saved collection" : "All saved posts");
+  const title = `${collectionName} (@${descriptor.username})`;
+
+  return {
+    username: descriptor.username,
+    crawlKey: getCrawlJobKey(getCrawlScopeKey(descriptor)),
+    scope: "saved",
+    collectionId: descriptor.collectionId || null,
+    pageUrl: tabUrl,
+    title,
+    status: "paused",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    completedAt: null,
+    hasMore: Boolean(initialTimeline.hasNextPage && initialTimeline.nextCursor),
+    nextCursor: initialTimeline.nextCursor || null,
+    pendingShortcodes: initialTimeline.shortcodes,
     profileMediaFilter: settings.profileMediaFilter,
     fullCrawlPace: settings.fullCrawlPace,
     duplicateMode: settings.duplicateMode,
@@ -1760,7 +1868,9 @@ async function collectFullProfileCrawlBatch(job, tabUrl, settings) {
   ) {
     try {
       await pauseForFullCrawlStep(settings, "pageFetchDelayRangeMs");
-      const page = await fetchProfileTimelinePage(job.userId, nextCursor, tabUrl);
+      const page = job.scope === "saved"
+        ? await fetchSavedPostsPage(job.collectionId, nextCursor, tabUrl)
+        : await fetchProfileTimelinePage(job.userId, nextCursor, tabUrl);
       pagesFetched += 1;
       pendingShortcodes.push(...page.shortcodes);
       nextCursor = page.nextCursor;
@@ -2016,6 +2126,137 @@ async function resolveProfilePlan(tabUrl, descriptor, settings, progressCallback
   };
 }
 
+async function resolveSavedPlan(tabUrl, descriptor, settings, progressCallback = null) {
+  const timeline = await fetchSavedPostsPage(
+    descriptor.collectionId,
+    null,
+    tabUrl,
+    Math.min(12, settings.maxProfilePosts)
+  );
+  const shortcodes = [...timeline.shortcodes];
+  let cursor = timeline.nextCursor;
+  let hasNextPage = timeline.hasNextPage;
+  let pagesFetched = 1;
+
+  while (
+    shortcodes.length < settings.maxProfilePosts &&
+    hasNextPage &&
+    cursor &&
+    pagesFetched < 8
+  ) {
+    const page = await fetchSavedPostsPage(
+      descriptor.collectionId,
+      cursor,
+      tabUrl,
+      Math.min(12, settings.maxProfilePosts - shortcodes.length)
+    );
+    shortcodes.push(...page.shortcodes);
+    cursor = page.nextCursor;
+    hasNextPage = page.hasNextPage;
+    pagesFetched += 1;
+  }
+
+  const uniqueShortcodes = Array.from(new Set(shortcodes)).slice(0, settings.maxProfilePosts);
+  if (!uniqueShortcodes.length) {
+    throw new InstagramResolverError(
+      "saved_posts_empty",
+      "Instagram did not return any posts for this saved page.",
+      { username: descriptor.username, collectionId: descriptor.collectionId }
+    );
+  }
+
+  const aggregatedItems = [];
+  const failedPosts = [];
+  for (let index = 0; index < uniqueShortcodes.length; index += 1) {
+    const shortcode = uniqueShortcodes[index];
+    if (progressCallback) {
+      await progressCallback({
+        current: index + 1,
+        total: uniqueShortcodes.length,
+        shortcode,
+        shouldNotify: shouldReportProfileProgress(index + 1, uniqueShortcodes.length)
+      });
+    }
+
+    try {
+      const postPlan = await resolvePostPlan(`https://www.instagram.com/p/${shortcode}/`, {
+        kind: "post",
+        subtype: "post",
+        shortcode
+      });
+      aggregatedItems.push(
+        ...postPlan.items.map((item) => ({
+          ...item,
+          postId: postPlan.meta.id,
+          postShortcode: postPlan.meta.id
+        }))
+      );
+    } catch (err) {
+      if (isRateLimitError(err)) {
+        throw err;
+      }
+      failedPosts.push({ shortcode, error: toErrorDetails(err) });
+      logWarn("saved_post_resolution_failed", {
+        shortcode,
+        error: toErrorDetails(err)
+      });
+    }
+  }
+
+  const unfilteredItems = uniqBy(aggregatedItems, (item) => item.url);
+  if (!unfilteredItems.length) {
+    throw new InstagramResolverError(
+      "saved_posts_unavailable",
+      "The saved page returned posts, but none could be resolved into downloadable media.",
+      { username: descriptor.username, collectionId: descriptor.collectionId, failedPosts }
+    );
+  }
+
+  const filteredItems = applyProfileMediaFilter(unfilteredItems, settings.profileMediaFilter);
+  if (!filteredItems.length) {
+    throw new InstagramResolverError(
+      "profile_filter_empty",
+      `The saved page returned media, but none matched the selected media filter: ${formatProfileMediaFilterLabel(settings.profileMediaFilter)}.`,
+      { username: descriptor.username, profileMediaFilter: settings.profileMediaFilter }
+    );
+  }
+
+  const collectionLabel = descriptor.collectionId ? "Saved collection" : "All saved posts";
+  const collectionKey = descriptor.collectionId || "all";
+  return {
+    meta: {
+      id: `saved-${collectionKey}`,
+      username: descriptor.username,
+      displayName: collectionLabel,
+      ownerId: null,
+      pageKind: "saved",
+      title: `${collectionLabel} (@${descriptor.username})`,
+      caption: null,
+      pageUrl: tabUrl,
+      timestamp: null,
+      source: "instagram_saved_posts_batch",
+      profilePostCount: uniqueShortcodes.length,
+      failedPostCount: failedPosts.length,
+      profileMediaFilter: settings.profileMediaFilter,
+      unfilteredItemCount: unfilteredItems.length,
+      filteredItemCount: filteredItems.length,
+      pagination: {
+        initialCount: timeline.shortcodes.length,
+        additionalCount: Math.max(0, uniqueShortcodes.length - timeline.shortcodes.length),
+        pagesFetched,
+        stopReason: uniqueShortcodes.length >= settings.maxProfilePosts
+          ? "requested_limit_reached"
+          : hasNextPage && cursor
+            ? "iteration_cap"
+            : "instagram_reported_end",
+        error: null,
+        source: "instagram_saved_feed"
+      }
+    },
+    items: filteredItems
+  };
+}
+
 async function resolveProfileBatchPlanFromShortcodes(tabUrl, job, shortcodes, settings, progressCallback = null) {
   const aggregatedItems = [];
   const failedPosts = [];
@@ -2024,7 +2265,7 @@ async function resolveProfileBatchPlanFromShortcodes(tabUrl, job, shortcodes, se
   let stopRequested = false;
 
   for (let index = 0; index < shortcodes.length; index += 1) {
-    if (isFullProfileCrawlStopRequested(job.username)) {
+    if (isFullProfileCrawlStopRequested(job.crawlKey || job.username)) {
       stopRequested = true;
       remainingShortcodes.push(...shortcodes.slice(index));
       break;
@@ -2090,12 +2331,12 @@ async function resolveProfileBatchPlanFromShortcodes(tabUrl, job, shortcodes, se
       username: job.username,
       displayName: job.title || `@${job.username}`,
       ownerId: job.userId || null,
-      pageKind: "profile",
+      pageKind: job.scope === "saved" ? "saved" : "profile",
       title: job.title || `@${job.username}`,
       caption: null,
       pageUrl: job.pageUrl || tabUrl,
       timestamp: null,
-      source: "instagram_profile_full_crawl",
+      source: job.scope === "saved" ? "instagram_saved_full_crawl" : "instagram_profile_full_crawl",
       profilePostCount: processedPostCount,
       failedPostCount: failedPosts.length,
       profileMediaFilter: settings.profileMediaFilter,
@@ -2234,9 +2475,13 @@ async function resolveDownloadPlan(tabUrl, settings = null, progressCallback = n
     return resolveProfilePlan(tabUrl, descriptor, resolvedSettings, progressCallback, tabId);
   }
 
+  if (descriptor.kind === "saved") {
+    return resolveSavedPlan(tabUrl, descriptor, resolvedSettings, progressCallback);
+  }
+
   throw new InstagramResolverError(
     "unsupported_url",
-    "Open an Instagram post, reel, story, highlight, or profile first.",
+    "Open an Instagram post, reel, story, highlight, profile, or saved-posts page first.",
     { tabUrl }
   );
 }
@@ -2830,7 +3075,8 @@ async function sendToast(tabId, message, level = "info") {
 function buildSummary(plan) {
   const imageCount = plan.items.filter((item) => item.type === "image").length;
   const videoCount = plan.items.filter((item) => item.type === "video").length;
-  const isFullCrawl = plan.meta.source === "instagram_profile_full_crawl";
+  const isFullCrawl = plan.meta.source === "instagram_profile_full_crawl" ||
+    plan.meta.source === "instagram_saved_full_crawl";
 
   return {
     username: plan.meta.username,
@@ -2917,8 +3163,12 @@ async function hydrateCachedPreview(preview, settings) {
     ...preview,
     summary,
     items,
-    crawlJob: summary.pageKind === "profile"
-      ? summarizeCrawlJob(await getCrawlJob(preview.meta.username || summary.username))
+    crawlJob: summary.pageKind === "profile" || summary.pageKind === "saved"
+      ? summarizeCrawlJob(await getCrawlJob(
+        summary.pageKind === "saved"
+          ? getCrawlScopeKey(parseInstagramUrl(preview.meta.pageUrl))
+          : preview.meta.username || summary.username
+      ))
       : null
   };
 }
@@ -2957,8 +3207,12 @@ async function getPagePreview(tab) {
   const plan = await enrichPlanMetadata(diagnosticPlan, tabUrl, settings);
   const knownDownloadKeys = settings.duplicateMode === "history" ? await getKnownDownloadKeys() : new Set();
   const preview = buildPlanPreview(plan, settings, knownDownloadKeys);
-  if (plan.meta.pageKind === "profile") {
-    preview.crawlJob = summarizeCrawlJob(await getCrawlJob(plan.meta.username));
+  if (plan.meta.pageKind === "profile" || plan.meta.pageKind === "saved") {
+    preview.crawlJob = summarizeCrawlJob(await getCrawlJob(
+      plan.meta.pageKind === "saved"
+        ? getCrawlScopeKey(parseInstagramUrl(tabUrl))
+        : plan.meta.username
+    ));
   }
   setCachedPreview(cacheKey, preview);
   await setSessionCachedPreview(tab.id, cacheKey, tabUrl, preview);
@@ -3005,14 +3259,14 @@ async function clearDownloadHistory() {
 async function getProfileCrawlStatus(tab) {
   const tabUrl = tab?.url || "";
   const descriptor = parseInstagramUrl(tabUrl);
-  if (descriptor.kind !== "profile") {
+  if (descriptor.kind !== "profile" && descriptor.kind !== "saved") {
     return {
       ok: true,
       crawlJob: null
     };
   }
 
-  const crawlJob = await getCrawlJob(descriptor.username);
+  const crawlJob = await getCrawlJob(getCrawlScopeKey(descriptor));
   return {
     ok: true,
     crawlJob: summarizeCrawlJob(crawlJob)
@@ -3022,15 +3276,15 @@ async function getProfileCrawlStatus(tab) {
 async function stopFullProfileCrawl(tab) {
   const tabUrl = tab?.url || "";
   const descriptor = parseInstagramUrl(tabUrl);
-  if (descriptor.kind !== "profile") {
+  if (descriptor.kind !== "profile" && descriptor.kind !== "saved") {
     throw new InstagramResolverError(
       "unsupported_url",
-      "Open an Instagram profile page before stopping a full crawl job.",
+      "Open an Instagram profile or saved-posts page before stopping its full crawl job.",
       { tabUrl }
     );
   }
 
-  const crawlJob = await getCrawlJob(descriptor.username);
+  const crawlJob = await getCrawlJob(getCrawlScopeKey(descriptor));
   if (!crawlJob) {
     return {
       ok: true,
@@ -3039,10 +3293,11 @@ async function stopFullProfileCrawl(tab) {
     };
   }
 
-  requestFullProfileCrawlStop(crawlJob.username);
+  const crawlKey = crawlJob.crawlKey || getCrawlJobKey(crawlJob.username);
+  requestFullProfileCrawlStop(crawlKey);
   const nextJob = {
     ...crawlJob,
-    status: isFullProfileCrawlActive(crawlJob.username) ? "stopping" : "paused",
+    status: isFullProfileCrawlActive(crawlKey) ? "stopping" : "paused",
     updatedAt: new Date().toISOString(),
     lastError: null
   };
@@ -3057,15 +3312,15 @@ async function stopFullProfileCrawl(tab) {
 async function resetFullProfileCrawl(tab) {
   const tabUrl = tab?.url || "";
   const descriptor = parseInstagramUrl(tabUrl);
-  if (descriptor.kind !== "profile") {
+  if (descriptor.kind !== "profile" && descriptor.kind !== "saved") {
     throw new InstagramResolverError(
       "unsupported_url",
-      "Open an Instagram profile page before resetting a full crawl job.",
+      "Open an Instagram profile or saved-posts page before resetting its full crawl job.",
       { tabUrl }
     );
   }
 
-  await removeCrawlJob(descriptor.username);
+  await removeCrawlJob(getCrawlScopeKey(descriptor));
   return {
     ok: true
   };
@@ -3079,16 +3334,17 @@ async function runFullProfileCrawl(tab, _options = {}) {
   const tabId = tab.id;
   const tabUrl = tab.url || "";
   const descriptor = parseInstagramUrl(tabUrl);
-  if (descriptor.kind !== "profile") {
+  if (descriptor.kind !== "profile" && descriptor.kind !== "saved") {
     throw new InstagramResolverError(
       "unsupported_url",
-      "Open an Instagram profile page before starting a full crawl.",
+      "Open an Instagram profile or saved-posts page before starting a full crawl.",
       { tabUrl }
     );
   }
 
   const settings = await getSettings();
-  let crawlJob = await getCrawlJob(descriptor.username);
+  const crawlKey = getCrawlScopeKey(descriptor);
+  let crawlJob = await getCrawlJob(crawlKey);
   const aggregateResult = {
     requested: 0,
     downloaded: 0,
@@ -3097,15 +3353,19 @@ async function runFullProfileCrawl(tab, _options = {}) {
   };
 
   if (!crawlJob || crawlJob.status === "completed") {
-    const pageData = await extractInstagramPageData(tabId, descriptor.username, FULL_PROFILE_CRAWL_POST_BATCH_LIMIT);
-    const hasUsablePageData = Boolean(pageData?.user?.id || pageData?.user?.pk || pageData?.timeline?.shortcodes?.length);
-    const profileInfo = hasUsablePageData
-      ? { user: pageData.user, raw: null }
-      : await fetchProfileInfo(descriptor.username, tabUrl);
-    crawlJob = await createFullProfileCrawlJob(profileInfo, tabUrl, settings, pageData);
+    if (descriptor.kind === "saved") {
+      crawlJob = await createFullSavedCrawlJob(descriptor, tabUrl, settings);
+    } else {
+      const pageData = await extractInstagramPageData(tabId, descriptor.username, FULL_PROFILE_CRAWL_POST_BATCH_LIMIT);
+      const hasUsablePageData = Boolean(pageData?.user?.id || pageData?.user?.pk || pageData?.timeline?.shortcodes?.length);
+      const profileInfo = hasUsablePageData
+        ? { user: pageData.user, raw: null }
+        : await fetchProfileInfo(descriptor.username, tabUrl);
+      crawlJob = await createFullProfileCrawlJob(profileInfo, tabUrl, settings, pageData);
+    }
   }
 
-  if (isFullProfileCrawlActive(descriptor.username)) {
+  if (isFullProfileCrawlActive(crawlKey)) {
     return {
       ok: true,
       alreadyRunning: true,
@@ -3137,16 +3397,16 @@ async function runFullProfileCrawl(tab, _options = {}) {
   };
   await saveCrawlJob(crawlJob);
 
-  await setBadge(tabId, "CR", BADGE_COLORS.working, `Crawling @${crawlJob.username}`);
-  await sendToast(tabId, `Continuing full crawl for @${crawlJob.username}...`, "info");
+  await setBadge(tabId, "CR", BADGE_COLORS.working, `Crawling ${crawlJob.title}`);
+  await sendToast(tabId, `Continuing full crawl for ${crawlJob.title}...`, "info");
 
-  markFullProfileCrawlActive(crawlJob.username);
-  clearFullProfileCrawlStop(crawlJob.username);
+  markFullProfileCrawlActive(crawlKey);
+  clearFullProfileCrawlStop(crawlKey);
 
   try {
     while (true) {
-      if (isFullProfileCrawlStopRequested(crawlJob.username)) {
-        clearFullProfileCrawlStop(crawlJob.username);
+      if (isFullProfileCrawlStopRequested(crawlKey)) {
+        clearFullProfileCrawlStop(crawlKey);
         crawlJob = {
           ...crawlJob,
           status: "paused",
@@ -3164,8 +3424,8 @@ async function runFullProfileCrawl(tab, _options = {}) {
           }
         };
         await saveCrawlJob(crawlJob);
-        await setBadge(tabId, "STOP", BADGE_COLORS.error, `Full crawl paused for @${crawlJob.username}`);
-        await sendToast(tabId, `Full crawl paused for @${crawlJob.username}.`, "info");
+        await setBadge(tabId, "STOP", BADGE_COLORS.error, `Full crawl paused for ${crawlJob.title}`);
+        await sendToast(tabId, `Full crawl paused for ${crawlJob.title}.`, "info");
         clearBadgeSoon(tabId, tabUrl, 2400);
         return {
           ok: true,
@@ -3209,8 +3469,8 @@ async function runFullProfileCrawl(tab, _options = {}) {
         await saveCrawlJob(crawlJob);
 
         if (batchPausedForRateLimit) {
-          await setBadge(tabId, "429", BADGE_COLORS.error, `Instagram rate limited @${crawlJob.username}`);
-          await sendToast(tabId, `Instagram rate limited the full crawl for @${crawlJob.username}. Resume later from the saved checkpoint.`, "info");
+          await setBadge(tabId, "429", BADGE_COLORS.error, `Instagram rate limited ${crawlJob.title}`);
+          await sendToast(tabId, `Instagram rate limited the full crawl for ${crawlJob.title}. Resume later from the saved checkpoint.`, "info");
           clearBadgeSoon(tabId, tabUrl, 2600);
           return {
             ok: true,
@@ -3220,7 +3480,7 @@ async function runFullProfileCrawl(tab, _options = {}) {
           };
         }
 
-        await setBadge(tabId, "OK", BADGE_COLORS.success, `Full crawl complete for @${crawlJob.username}`);
+        await setBadge(tabId, "OK", BADGE_COLORS.success, `Full crawl complete for ${crawlJob.title}`);
         clearBadgeSoon(tabId, tabUrl);
         return {
           ok: true,
@@ -3350,8 +3610,8 @@ async function runFullProfileCrawl(tab, _options = {}) {
       await saveCrawlJob(crawlJob);
 
       if (pausedForRateLimit) {
-        await setBadge(tabId, "429", BADGE_COLORS.error, `Instagram rate limited @${crawlJob.username}`);
-        await sendToast(tabId, `Instagram rate limited the full crawl for @${crawlJob.username}. Resume later from the saved checkpoint.`, "info");
+        await setBadge(tabId, "429", BADGE_COLORS.error, `Instagram rate limited ${crawlJob.title}`);
+        await sendToast(tabId, `Instagram rate limited the full crawl for ${crawlJob.title}. Resume later from the saved checkpoint.`, "info");
         clearBadgeSoon(tabId, tabUrl, 2600);
         return {
           ok: true,
@@ -3362,9 +3622,9 @@ async function runFullProfileCrawl(tab, _options = {}) {
       }
 
       if (stoppedByUser) {
-        clearFullProfileCrawlStop(crawlJob.username);
-        await setBadge(tabId, "STOP", BADGE_COLORS.error, `Full crawl paused for @${crawlJob.username}`);
-        await sendToast(tabId, `Full crawl paused for @${crawlJob.username}.`, "info");
+        clearFullProfileCrawlStop(crawlKey);
+        await setBadge(tabId, "STOP", BADGE_COLORS.error, `Full crawl paused for ${crawlJob.title}`);
+        await sendToast(tabId, `Full crawl paused for ${crawlJob.title}.`, "info");
         clearBadgeSoon(tabId, tabUrl, 2400);
         return {
           ok: true,
@@ -3375,8 +3635,8 @@ async function runFullProfileCrawl(tab, _options = {}) {
       }
 
       if (!hasSavedWork) {
-        await setBadge(tabId, "OK", BADGE_COLORS.success, `Full crawl complete for @${crawlJob.username}`);
-        await sendToast(tabId, `Full crawl completed for @${crawlJob.username}.`, "success");
+        await setBadge(tabId, "OK", BADGE_COLORS.success, `Full crawl complete for ${crawlJob.title}`);
+        await sendToast(tabId, `Full crawl completed for ${crawlJob.title}.`, "success");
         clearBadgeSoon(tabId, tabUrl);
         return {
           ok: true,
@@ -3397,9 +3657,9 @@ async function runFullProfileCrawl(tab, _options = {}) {
     await saveCrawlJob(crawlJob);
     throw err;
   } finally {
-    clearFullProfileCrawlActive(crawlJob.username);
+    clearFullProfileCrawlActive(crawlKey);
     if (crawlJob.status !== "stopping") {
-      clearFullProfileCrawlStop(crawlJob.username);
+      clearFullProfileCrawlStop(crawlKey);
     }
   }
 }

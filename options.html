@@ -440,7 +440,7 @@
                   <input id="confirmBeforeDownload" name="confirmBeforeDownload" type="checkbox">
                   <div>
                     <label for="confirmBeforeDownload">Confirm before starting a download</label>
-                    <small>Shows a confirmation prompt for direct downloads. Full-profile crawls begin immediately.</small>
+                    <small>Shows a confirmation prompt for direct downloads. Full-page crawls begin immediately.</small>
                   </div>
                 </div>
 
@@ -465,24 +465,24 @@
 
             <section class="section-card">
               <div class="section-heading">
-                <h2>Profile Downloads</h2>
-                <p>Set the scope for profile-page batches without affecting individual posts, reels, or stories.</p>
+                <h2>Profile And Saved Downloads</h2>
+                <p>Set the scope for profile and saved-post batches without affecting individual posts, reels, or stories.</p>
               </div>
               <div class="field-list">
                 <div class="field">
-                  <label for="maxProfilePosts">Maximum profile posts per run</label>
+                  <label for="maxProfilePosts">Maximum posts per batch run</label>
                   <input id="maxProfilePosts" name="maxProfilePosts" type="number" min="1" max="200" step="1" placeholder="24">
-                  <small>Used on Instagram profile pages. The extension resolves recent posts through the authenticated APIs and downloads each post's media.</small>
+                  <small>Used on Instagram profile and saved-post pages. The extension resolves posts through the authenticated APIs and downloads each post's media.</small>
                 </div>
 
                 <div class="field">
                   <label for="profileMediaFilter">Profile media filter</label>
                   <select id="profileMediaFilter" name="profileMediaFilter">
-                    <option value="all">Download all profile media</option>
-                    <option value="images">Download images only from profiles</option>
-                    <option value="videos">Download videos only from profiles</option>
+                    <option value="all">Download all media</option>
+                    <option value="images">Download images only</option>
+                    <option value="videos">Download videos only</option>
                   </select>
-                  <small>Applies only on Instagram profile pages. Posts, reels, stories, and highlights keep their native media mix.</small>
+                  <small>Applies to profile and saved-post batches. Posts, reels, stories, and highlights keep their native media mix.</small>
                 </div>
 
                 <div class="field">
@@ -492,7 +492,7 @@
                     <option value="balanced">Balanced</option>
                     <option value="aggressive">Aggressive</option>
                   </select>
-                  <small>Applies only to full-profile crawls. Slower pacing spaces out Instagram requests more aggressively, while aggressive pacing runs faster but is more likely to hit Instagram throttling.</small>
+                  <small>Applies to full profile and saved-post crawls. Slower pacing spaces out Instagram requests more aggressively, while aggressive pacing runs faster but is more likely to hit Instagram throttling.</small>
                 </div>
               </div>
             </section>

@@ -61,9 +61,9 @@ function buildConfirmMessage(summary) {
   if (summary?.isFullCrawl) {
     lines.push(
       "",
-      "This starts the full-profile crawl.",
+      "This starts the full-page crawl.",
       "The extension popup may close after this prompt.",
-      "The crawl will keep running in the background until the profile ends or Instagram rate limits it."
+      "The crawl will keep running in the background until the available posts end or Instagram rate limits it."
     );
   }
 
