@@ -933,6 +933,192 @@ function parseInstagramUrl(url) {
   return { kind: "unsupported" };
 }
 
+async function extractInstagramPageData(tabId, username, shortcodeLimit = 48) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    args: [String(username || "").toLowerCase(), Math.max(1, Number(shortcodeLimit) || 48)],
+    func: (targetUsername, resultLimit) => {
+      const roots = [
+        window._sharedData,
+        window.__initialData,
+        window.__additionalData,
+        window.__NEXT_DATA__
+      ].filter((value) => value && typeof value === "object");
+
+      function parseJsonCandidate(text) {
+        const normalized = String(text || "").trim();
+        if (!normalized || !/^[\[{]/.test(normalized)) return null;
+        try {
+          return JSON.parse(normalized);
+        } catch {
+          return null;
+        }
+      }
+
+      function parseAssignedJson(text, marker) {
+        const markerIndex = text.indexOf(marker);
+        if (markerIndex < 0) return null;
+        const start = text.indexOf("{", markerIndex + marker.length);
+        if (start < 0) return null;
+
+        let depth = 0;
+        let inString = false;
+        let escaped = false;
+        for (let index = start; index < text.length; index += 1) {
+          const character = text[index];
+          if (inString) {
+            if (escaped) {
+              escaped = false;
+            } else if (character === "\\") {
+              escaped = true;
+            } else if (character === "\"") {
+              inString = false;
+            }
+            continue;
+          }
+          if (character === "\"") {
+            inString = true;
+          } else if (character === "{") {
+            depth += 1;
+          } else if (character === "}" && --depth === 0) {
+            return parseJsonCandidate(text.slice(start, index + 1));
+          }
+        }
+        return null;
+      }
+
+      for (const script of Array.from(document.scripts)) {
+        const text = script.textContent || "";
+        if (!text || text.length > 5000000) continue;
+        const parsed = parseJsonCandidate(text);
+        if (parsed) roots.push(parsed);
+        for (const marker of ["_sharedData", "\"user\""]) {
+          if (text.includes(marker)) {
+            const assignedData = parseAssignedJson(text, marker);
+            if (assignedData) roots.push(assignedData);
+          }
+        }
+      }
+
+      const visited = new Set();
+      const matchingUsers = [];
+      const timelineMatches = [];
+      let visitedCount = 0;
+
+      function visit(value, path, depth) {
+        if (!value || typeof value !== "object" || depth > 30 || visited.has(value) || visitedCount >= 100000) {
+          return;
+        }
+        visited.add(value);
+        visitedCount += 1;
+
+        if (Array.isArray(value)) {
+          for (let index = 0; index < value.length; index += 1) {
+            visit(value[index], `${path}[${index}]`, depth + 1);
+          }
+          return;
+        }
+
+        const valueUsername = String(value.username || "").toLowerCase();
+        if (targetUsername && valueUsername === targetUsername && (value.id || value.pk)) {
+          matchingUsers.push({
+            id: String(value.id || value.pk),
+            pk: String(value.pk || value.id),
+            username: value.username,
+            full_name: value.full_name || ""
+          });
+        }
+
+        const routeUsername = String(value.params?.username || "").toLowerCase();
+        const routeProfileId = routeUsername === targetUsername
+          ? value.route?.rootView?.props?.id ||
+            value.route?.rootView?.props?.page_logging?.params?.profile_id ||
+            value.route?.profile_id ||
+            null
+          : null;
+        if (targetUsername && routeProfileId) {
+          matchingUsers.push({
+            id: String(routeProfileId),
+            pk: String(routeProfileId),
+            username: targetUsername,
+            full_name: ""
+          });
+        }
+
+        const edges = Array.isArray(value.edges) ? value.edges : [];
+        const shortcodes = edges
+          .map((edge) => edge?.node?.shortcode || edge?.node?.code)
+          .filter((shortcode) => typeof shortcode === "string" && shortcode);
+        if (shortcodes.length || value.page_info?.end_cursor) {
+          const edgeOwnersMatch = edges.some((edge) => {
+            const owner = edge?.node?.owner || edge?.node?.user;
+            return String(owner?.username || "").toLowerCase() === targetUsername;
+          });
+          const pathLooksLikeTimeline = /timeline|media|profile|user/i.test(path);
+          if (edgeOwnersMatch || pathLooksLikeTimeline) {
+            timelineMatches.push({
+              shortcodes,
+              nextCursor: value.page_info?.end_cursor || null,
+              hasNextPage: Boolean(value.page_info?.has_next_page),
+              score: shortcodes.length * 10 + (edgeOwnersMatch ? 5 : 0) + (pathLooksLikeTimeline ? 2 : 0)
+            });
+          }
+        }
+
+        for (const [key, nestedValue] of Object.entries(value)) {
+          visit(nestedValue, path ? `${path}.${key}` : key, depth + 1);
+        }
+      }
+
+      roots.forEach((root, index) => visit(root, `root${index}`, 0));
+
+      const profileShortcodes = [];
+      for (const anchor of document.querySelectorAll("a[href]")) {
+        let pathSegments;
+        try {
+          pathSegments = new URL(anchor.href, location.href).pathname.split("/").filter(Boolean);
+        } catch {
+          continue;
+        }
+        const mediaPathIndex = ["p", "reel", "reels", "tv"].includes(pathSegments[0])
+          ? 0
+          : ["p", "reel", "reels", "tv"].includes(pathSegments[1])
+            ? 1
+            : -1;
+        const shortcode = mediaPathIndex >= 0
+          ? pathSegments[mediaPathIndex + 1]
+          : null;
+        if (shortcode && /^[A-Za-z0-9_-]+$/.test(shortcode) && !profileShortcodes.includes(shortcode)) {
+          profileShortcodes.push(shortcode);
+          if (profileShortcodes.length >= resultLimit) break;
+        }
+      }
+
+      matchingUsers.sort((left, right) => Number(Boolean(right.full_name)) - Number(Boolean(left.full_name)));
+      timelineMatches.sort((left, right) => right.score - left.score);
+      const matchedUser = matchingUsers[0] || null;
+      const matchedTimeline = timelineMatches[0] || null;
+      const shortcodes = matchedTimeline?.shortcodes?.length
+        ? matchedTimeline.shortcodes
+        : profileShortcodes;
+
+      if (!matchedUser && !shortcodes.length) return null;
+      return {
+        user: matchedUser || { username: targetUsername },
+        timeline: {
+          shortcodes: Array.from(new Set(shortcodes)).slice(0, resultLimit),
+          nextCursor: matchedTimeline?.nextCursor || null,
+          hasNextPage: Boolean(matchedTimeline?.hasNextPage)
+        },
+        source: matchedTimeline?.shortcodes?.length ? "profile_page_data" : "profile_page_links"
+      };
+    }
+  });
+
+  return results[0]?.result || null;
+}
+
 function getProfilePageFetchUrl(tabUrl, username) {
   try {
     const parsed = new URL(tabUrl || `https://www.instagram.com/${username || ""}/`);
@@ -959,6 +1145,10 @@ async function ensureInstagramSession(tabUrl, pk) {
       8000
     );
   } catch (err) {
+    if (isRateLimitError(err)) {
+      throw err;
+    }
+
     logWarn("session_bootstrap_failed", {
       tabUrl,
       pk,
@@ -1118,6 +1308,10 @@ async function resolvePostPlan(tabUrl, descriptor) {
       return buildPostPlan(media, descriptor, "instagram_api_media_info");
     }
   } catch (err) {
+    if (isRateLimitError(err)) {
+      throw err;
+    }
+
     logWarn("post_info_failed", {
       tabUrl,
       shortcode,
@@ -1147,6 +1341,10 @@ async function resolvePostPlan(tabUrl, descriptor) {
       return buildPostPlan(media, descriptor, "instagram_api_graphql");
     }
   } catch (err) {
+    if (isRateLimitError(err)) {
+      throw err;
+    }
+
     logWarn("post_graphql_failed", {
       tabUrl,
       shortcode,
@@ -1438,6 +1636,10 @@ async function getInitialProfileTimeline(profileInfo, tabUrl, requestedCount) {
         return htmlFallbackTimeline;
       }
     } catch (htmlErr) {
+      if (isRateLimitError(htmlErr)) {
+        throw htmlErr;
+      }
+
       logWarn("profile_initial_html_fallback_failed", {
         username: user?.username || null,
         error: toErrorDetails(htmlErr)
@@ -1463,6 +1665,10 @@ async function getInitialProfileTimeline(profileInfo, tabUrl, requestedCount) {
       source: "profile_feed_first_page"
     };
   } catch (err) {
+    if (isRateLimitError(err)) {
+      throw err;
+    }
+
     logWarn("profile_initial_timeline_fallback_failed", {
       userId,
       error: toErrorDetails(err)
@@ -1473,6 +1679,10 @@ async function getInitialProfileTimeline(profileInfo, tabUrl, requestedCount) {
         return htmlFallbackTimeline;
       }
     } catch (htmlErr) {
+      if (isRateLimitError(htmlErr)) {
+        throw htmlErr;
+      }
+
       logWarn("profile_initial_html_fallback_failed", {
         username: user?.username || null,
         error: toErrorDetails(htmlErr)
@@ -1487,8 +1697,13 @@ async function getInitialProfileTimeline(profileInfo, tabUrl, requestedCount) {
   }
 }
 
-async function createFullProfileCrawlJob(user, tabUrl, settings) {
-  const initialTimeline = await getInitialProfileTimeline(user, tabUrl, FULL_PROFILE_CRAWL_POST_BATCH_LIMIT);
+async function createFullProfileCrawlJob(user, tabUrl, settings, pageData = null) {
+  const initialTimeline = pageData?.timeline?.shortcodes?.length
+    ? {
+      ...pageData.timeline,
+      source: pageData.source
+    }
+    : await getInitialProfileTimeline(user, tabUrl, FULL_PROFILE_CRAWL_POST_BATCH_LIMIT);
   const profileUser = user?.user || user;
   const pendingShortcodes = initialTimeline.shortcodes;
 
@@ -1501,7 +1716,11 @@ async function createFullProfileCrawlJob(user, tabUrl, settings) {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     completedAt: null,
-    hasMore: Boolean(initialTimeline.hasNextPage && initialTimeline.nextCursor),
+    hasMore: Boolean(
+      (profileUser?.id || profileUser?.pk) &&
+      initialTimeline.hasNextPage &&
+      initialTimeline.nextCursor
+    ),
     nextCursor: initialTimeline.nextCursor || null,
     pendingShortcodes,
     profileMediaFilter: settings.profileMediaFilter,
@@ -1616,6 +1835,10 @@ async function fetchAdditionalProfileShortcodes(userId, afterCursor, tabUrl, rem
         break;
       }
     } catch (err) {
+      if (isRateLimitError(err)) {
+        throw err;
+      }
+
       logWarn("profile_pagination_failed", {
         userId,
         error: toErrorDetails(err)
@@ -1636,10 +1859,23 @@ async function fetchAdditionalProfileShortcodes(userId, afterCursor, tabUrl, rem
   };
 }
 
-async function resolveProfilePlan(tabUrl, descriptor, settings, progressCallback = null) {
-  const profileInfo = await fetchProfileInfo(descriptor.username, tabUrl);
+async function resolveProfilePlan(tabUrl, descriptor, settings, progressCallback = null, tabId = null) {
+  const pageData = tabId
+    ? await extractInstagramPageData(tabId, descriptor.username, settings.maxProfilePosts)
+    : null;
+  const pageShortcodes = pageData?.timeline?.shortcodes || [];
+  const hasUsablePageData = Boolean(pageData?.user?.id || pageData?.user?.pk || pageShortcodes.length);
+  const profileInfo = hasUsablePageData
+    ? { user: pageData.user, raw: null }
+    : await fetchProfileInfo(descriptor.username, tabUrl);
   const user = profileInfo.user;
-  const initialTimeline = await getInitialProfileTimeline(profileInfo, tabUrl, settings.maxProfilePosts);
+  const initialTimeline = pageShortcodes.length
+    ? {
+      ...pageData.timeline,
+      shortcodes: pageShortcodes,
+      source: pageData.source
+    }
+    : await getInitialProfileTimeline(profileInfo, tabUrl, settings.maxProfilePosts);
   const initialShortcodes = initialTimeline.shortcodes;
   let shortcodes = [...initialShortcodes];
   let pagination = {
@@ -1718,6 +1954,10 @@ async function resolveProfilePlan(tabUrl, descriptor, settings, progressCallback
         }))
       );
     } catch (err) {
+      if (isRateLimitError(err)) {
+        throw err;
+      }
+
       failedPosts.push({
         shortcode,
         error: toErrorDetails(err)
@@ -1898,14 +2138,16 @@ function normalizeStoryEntry(item, meta, index) {
 function buildStoryPlan(reel, descriptor, source) {
   const reelItems = Array.isArray(reel?.items) ? reel.items : [];
   const owner = extractOwner(reel?.user ? { user: reel.user } : reel);
-  const filteredItems = descriptor.storyPk
-    ? reelItems.filter((item) => String(item?.pk || item?.id || "") === String(descriptor.storyPk))
-    : reelItems;
+  const selectedItems = descriptor.kind === "story" || !descriptor.storyPk
+    ? reelItems
+    : reelItems.filter((item) => String(item?.pk || item?.id || "") === String(descriptor.storyPk));
 
-  if (!filteredItems.length) {
+  if (!selectedItems.length) {
     throw new InstagramResolverError(
       "story_not_found",
-      "The requested story item was not returned by Instagram.",
+      descriptor.kind === "story"
+        ? "Instagram did not return any current stories for this account."
+        : "The requested story item was not returned by Instagram.",
       { descriptor }
     );
   }
@@ -1919,11 +2161,11 @@ function buildStoryPlan(reel, descriptor, source) {
     pageUrl: null,
     title: reel?.title || null,
     caption: null,
-    timestamp: Number(filteredItems[0]?.taken_at || 0) || null,
+    timestamp: Number(selectedItems[0]?.taken_at || 0) || null,
     source
   };
 
-  const items = filteredItems
+  const items = selectedItems
     .map((item, index) => normalizeStoryEntry(item, meta, index))
     .filter(Boolean);
 
@@ -1941,10 +2183,15 @@ function buildStoryPlan(reel, descriptor, source) {
   };
 }
 
-async function resolveStoryPlan(tabUrl, descriptor) {
+async function resolveStoryPlan(tabUrl, descriptor, tabId = null) {
+  const pageData = tabId && descriptor.kind === "story"
+    ? await extractInstagramPageData(tabId, descriptor.username, 1)
+    : null;
   const reelId = descriptor.kind === "highlight"
     ? `highlight:${descriptor.highlightId}`
-    : await lookupUserIdByUsername(descriptor.username, tabUrl);
+    : pageData?.user?.id || pageData?.user?.pk
+      ? String(pageData.user.id || pageData.user.pk)
+      : await lookupUserIdByUsername(descriptor.username, tabUrl);
 
   const reelsUrl = new URL(`${INSTAGRAM_WEB_API_BASE_URL}/feed/reels_media/`);
   reelsUrl.searchParams.set("reel_ids", reelId);
@@ -1971,7 +2218,7 @@ async function resolveStoryPlan(tabUrl, descriptor) {
   };
 }
 
-async function resolveDownloadPlan(tabUrl, settings = null, progressCallback = null) {
+async function resolveDownloadPlan(tabUrl, settings = null, progressCallback = null, tabId = null) {
   const descriptor = parseInstagramUrl(tabUrl);
   const resolvedSettings = settings || await getSettings();
 
@@ -1980,11 +2227,11 @@ async function resolveDownloadPlan(tabUrl, settings = null, progressCallback = n
   }
 
   if (descriptor.kind === "story" || descriptor.kind === "highlight") {
-    return resolveStoryPlan(tabUrl, descriptor);
+    return resolveStoryPlan(tabUrl, descriptor, tabId);
   }
 
   if (descriptor.kind === "profile") {
-    return resolveProfilePlan(tabUrl, descriptor, resolvedSettings, progressCallback);
+    return resolveProfilePlan(tabUrl, descriptor, resolvedSettings, progressCallback, tabId);
   }
 
   throw new InstagramResolverError(
@@ -2477,7 +2724,7 @@ async function updateAvailabilityBadge(tab) {
   }
 
   try {
-    await resolveDownloadPlan(tabUrl, getEasyModeProbeSettings(settings));
+    await resolveDownloadPlan(tabUrl, getEasyModeProbeSettings(settings), null, tabId);
     await setBadge(
       tabId,
       "OK",
@@ -2699,7 +2946,7 @@ async function getPagePreview(tab) {
     return hydrateCachedPreview(sessionCachedPreview, settings);
   }
 
-  const resolvedPlan = await resolveDownloadPlan(tabUrl, settings);
+  const resolvedPlan = await resolveDownloadPlan(tabUrl, settings, null, tab.id);
   const diagnosticPlan = {
     ...resolvedPlan,
     meta: {
@@ -2850,8 +3097,12 @@ async function runFullProfileCrawl(tab, _options = {}) {
   };
 
   if (!crawlJob || crawlJob.status === "completed") {
-    const profileInfo = await fetchProfileInfo(descriptor.username, tabUrl);
-    crawlJob = await createFullProfileCrawlJob(profileInfo, tabUrl, settings);
+    const pageData = await extractInstagramPageData(tabId, descriptor.username, FULL_PROFILE_CRAWL_POST_BATCH_LIMIT);
+    const hasUsablePageData = Boolean(pageData?.user?.id || pageData?.user?.pk || pageData?.timeline?.shortcodes?.length);
+    const profileInfo = hasUsablePageData
+      ? { user: pageData.user, raw: null }
+      : await fetchProfileInfo(descriptor.username, tabUrl);
+    crawlJob = await createFullProfileCrawlJob(profileInfo, tabUrl, settings, pageData);
   }
 
   if (isFullProfileCrawlActive(descriptor.username)) {
@@ -3195,7 +3446,7 @@ async function runDownloadFlow(tab, mode) {
       if (progress.shouldNotify) {
         await sendToast(tabId, `Resolving profile posts ${progress.current}/${progress.total}...`, "info");
       }
-    });
+    }, tabId);
     const diagnosticPlan = {
       ...resolvedPlan,
       meta: {
