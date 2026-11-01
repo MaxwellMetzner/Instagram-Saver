@@ -275,8 +275,6 @@ function getInstagramApiHeaders(refererUrl) {
   return {
     "X-IG-App-ID": "936619743392459",
     "X-ASBD-ID": "359341",
-    "X-IG-WWW-Claim": "0",
-    "X-Requested-With": "XMLHttpRequest",
     Origin: "https://www.instagram.com",
     Referer: refererUrl || "https://www.instagram.com/",
     Accept: "*/*"
@@ -845,7 +843,14 @@ function getErrorPresentation(err) {
     }
   };
 
-  const resolved = presentationByCode[code] || defaults;
+  const isInstagramServerError = Number(details.context?.status || 0) >= 500 &&
+    Number(details.context?.status || 0) < 600;
+  const resolved = presentationByCode[code] || (isInstagramServerError
+    ? {
+      title: "Instagram server error",
+      suggestion: "Instagram returned a temporary server error. Wait a few minutes before trying again."
+    }
+    : defaults);
   return {
     code,
     title: resolved.title,
@@ -1047,6 +1052,7 @@ async function extractInstagramPageData(tabId, username, shortcodeLimit = 48) {
       const visited = new Set();
       const matchingUsers = [];
       const timelineMatches = [];
+      const matchingStoryReels = [];
       let visitedCount = 0;
 
       function visit(value, path, depth) {
@@ -1070,6 +1076,20 @@ async function extractInstagramPageData(tabId, username, shortcodeLimit = 48) {
             pk: String(value.pk || value.id),
             username: value.username,
             full_name: value.full_name || ""
+          });
+        }
+
+        const storyOwner = value.user || value.owner;
+        const storyItems = Array.isArray(value.items) ? value.items : [];
+        if (
+          targetUsername &&
+          String(storyOwner?.username || "").toLowerCase() === targetUsername &&
+          (storyOwner.id || storyOwner.pk) &&
+          storyItems.some((item) => item?.pk || item?.id)
+        ) {
+          matchingStoryReels.push({
+            reel: value,
+            score: storyItems.filter((item) => item?.pk || item?.id).length
           });
         }
 
@@ -1140,15 +1160,25 @@ async function extractInstagramPageData(tabId, username, shortcodeLimit = 48) {
 
       matchingUsers.sort((left, right) => Number(Boolean(right.full_name)) - Number(Boolean(left.full_name)));
       timelineMatches.sort((left, right) => right.score - left.score);
+      matchingStoryReels.sort((left, right) => right.score - left.score);
       const matchedUser = matchingUsers[0] || null;
       const matchedTimeline = timelineMatches[0] || null;
+      const matchedStoryReel = matchingStoryReels[0]?.reel || null;
       const shortcodes = matchedTimeline?.shortcodes?.length
         ? matchedTimeline.shortcodes
         : profileShortcodes;
 
-      if (!matchedUser && !shortcodes.length) return null;
+      if (!matchedUser && !shortcodes.length && !matchedStoryReel) return null;
       return {
-        user: matchedUser || { username: targetUsername },
+        user: matchedUser || (matchedStoryReel
+          ? {
+            id: String(matchedStoryReel.user?.id || matchedStoryReel.user?.pk || ""),
+            pk: String(matchedStoryReel.user?.pk || matchedStoryReel.user?.id || ""),
+            username: matchedStoryReel.user?.username || targetUsername,
+            full_name: matchedStoryReel.user?.full_name || ""
+          }
+          : { username: targetUsername }),
+        storyReel: matchedStoryReel,
         timeline: {
           shortcodes: Array.from(new Set(shortcodes)).slice(0, resultLimit),
           nextCursor: matchedTimeline?.nextCursor || null,
@@ -1406,7 +1436,7 @@ async function lookupUserIdByUsername(username, tabUrl) {
   const url = new URL(`${INSTAGRAM_WEB_API_BASE_URL}/users/web_profile_info/`);
   url.searchParams.set("username", username);
   const data = await fetchJsonWithTimeout(url.href, {
-    headers: getInstagramApiHeaders(tabUrl)
+    headers: getInstagramApiHeaders(getProfilePageFetchUrl(tabUrl, username))
   });
 
   const userId = data?.data?.user?.id || data?.data?.user?.pk;
@@ -2424,10 +2454,73 @@ function buildStoryPlan(reel, descriptor, source) {
   };
 }
 
+async function fetchStoryMediaInfo(storyPk, tabUrl) {
+  const url = `${INSTAGRAM_WEB_API_BASE_URL}/media/${encodeURIComponent(storyPk)}/info/`;
+  const data = await fetchJsonWithTimeout(url, {
+    headers: getInstagramApiHeaders(tabUrl)
+  });
+  const story = data?.items?.find((item) => String(item?.pk || item?.id || "") === String(storyPk));
+
+  if (!story) {
+    throw new InstagramResolverError(
+      "story_unavailable",
+      "Instagram did not return the requested story frame. Check that it is still available and visible in your account.",
+      { storyPk, url }
+    );
+  }
+
+  return story;
+}
+
+async function extractStoryPageData(tabId, username) {
+  let pageData = null;
+  const attempts = 8;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    pageData = await extractInstagramPageData(tabId, username, 1);
+    if (pageData?.storyReel) {
+      return pageData;
+    }
+
+    if (attempt < attempts - 1) {
+      await sleep(250);
+    }
+  }
+
+  return pageData;
+}
+
 async function resolveStoryPlan(tabUrl, descriptor, tabId = null) {
   const pageData = tabId && descriptor.kind === "story"
-    ? await extractInstagramPageData(tabId, descriptor.username, 1)
+    ? await extractStoryPageData(tabId, descriptor.username)
     : null;
+  if (pageData?.storyReel) {
+    const plan = buildStoryPlan(pageData.storyReel, descriptor, "instagram_story_page_data");
+    return {
+      ...plan,
+      meta: {
+        ...plan.meta,
+        pageUrl: tabUrl
+      }
+    };
+  }
+
+  if (descriptor.kind === "story" && descriptor.storyPk) {
+    const story = await fetchStoryMediaInfo(descriptor.storyPk, tabUrl);
+    const plan = buildStoryPlan(
+      { user: story.user, items: [story] },
+      descriptor,
+      "instagram_api_media_info"
+    );
+    return {
+      ...plan,
+      meta: {
+        ...plan.meta,
+        pageUrl: tabUrl
+      }
+    };
+  }
+
   const reelId = descriptor.kind === "highlight"
     ? `highlight:${descriptor.highlightId}`
     : pageData?.user?.id || pageData?.user?.pk

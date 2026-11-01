@@ -16,6 +16,7 @@ const fileListEl = document.getElementById("file-list");
 const errorTitleEl = document.getElementById("error-title");
 const errorMessageEl = document.getElementById("error-message");
 const errorSuggestionEl = document.getElementById("error-suggestion");
+const errorRequestEl = document.getElementById("error-request");
 const downloadButton = document.getElementById("download-button");
 const refreshButton = document.getElementById("refresh-button");
 const settingsButton = document.getElementById("settings-button");
@@ -317,6 +318,7 @@ function renderError(error) {
 
   setElementText(errorMessageEl, nextMessage);
   setElementText(errorSuggestionEl, nextSuggestion);
+  setElementText(errorRequestEl, formatErrorRequest(error));
   batchDiagnosticsBlock.classList.add("hidden");
   crawlButton.classList.add("hidden");
   crawlSummaryEl.classList.add("hidden");
@@ -324,6 +326,26 @@ function renderError(error) {
   crawlDiagnosticsBlock.classList.add("hidden");
   updateActionTooltips();
   setStatus(fallbackTitle, true);
+}
+
+function formatErrorRequest(error) {
+  const requestUrl = error?.context?.url;
+  if (!requestUrl) {
+    return "";
+  }
+
+  let endpoint;
+  try {
+    const parsedUrl = new URL(requestUrl);
+    endpoint = `${parsedUrl.origin}${parsedUrl.pathname}`;
+  } catch {
+    return "";
+  }
+
+  const status = Number(error?.context?.status || 0);
+  return status > 0
+    ? `Failed request: HTTP ${status} from ${endpoint}`
+    : `Failed request: ${endpoint}`;
 }
 
 async function requestPreview() {
