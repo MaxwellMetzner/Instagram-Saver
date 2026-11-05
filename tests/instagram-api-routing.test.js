@@ -139,13 +139,24 @@ test("story frame fallback uses media info instead of profile and reels-feed loo
   );
 });
 
+test("highlight resolution tries both highlight reel-id formats and records diagnostics", () => {
+  const resolverSource = backgroundSource.match(
+    /async function resolveStoryPlan\(tabUrl, descriptor, tabId = null\) \{[\s\S]*?\n\}/
+  )?.[0];
+  assert.ok(resolverSource);
+  assert.match(resolverSource, /`highlight:\$\{descriptor\.highlightId\}`, String\(descriptor\.highlightId\)/);
+  assert.match(resolverSource, /requestLabel: descriptor\.kind === "highlight"/);
+  assert.match(resolverSource, /tabUrl, descriptor, diagnostics/);
+});
+
 test("page extraction finds stories nested in Instagram's reels-media route payload", () => {
   const extractorBody = backgroundSource.match(
-    /func: \(targetUsername, resultLimit\) => \{([\s\S]*?)\r?\n\s*\}\r?\n\s*\}\);/
+    /func: \(targetUsername, resultLimit, targetHighlightId\) => \{([\s\S]*?)\r?\n\s*\}\r?\n\s*\}\);/
   )?.[1];
   assert.ok(extractorBody);
 
   const storyReel = {
+    id: "17987606483520330",
     user: { id: "123", pk: "123", username: "nyknicks" },
     items: [{ id: "456", pk: "456", media_type: 1 }]
   };
@@ -169,6 +180,7 @@ test("page extraction finds stories nested in Instagram's reels-media route payl
   const extractPageData = new Function(
     "targetUsername",
     "resultLimit",
+    "targetHighlightId",
     "window",
     "document",
     "location",
@@ -177,6 +189,7 @@ test("page extraction finds stories nested in Instagram's reels-media route payl
   const pageData = extractPageData(
     "nyknicks",
     1,
+    null,
     { _sharedData: pageRoot },
     { scripts: [], querySelectorAll: () => [] },
     { href: "https://www.instagram.com/stories/nyknicks/" }
@@ -184,6 +197,24 @@ test("page extraction finds stories nested in Instagram's reels-media route payl
 
   assert.equal(pageData.storyReel.items[0].pk, "456");
   assert.equal(pageData.user.id, "123");
+
+  const highlightPageData = extractPageData(
+    "",
+    1,
+    "17987606483520330",
+    {
+      _sharedData: {
+        id: "17987606483520330",
+        reels_media: [{
+          user: storyReel.user,
+          items: storyReel.items
+        }]
+      }
+    },
+    { scripts: [], querySelectorAll: () => [] },
+    { href: "https://www.instagram.com/stories/highlights/17987606483520330/" }
+  );
+  assert.equal(highlightPageData.storyReel.items[0].pk, "456");
 });
 
 test("story extraction waits briefly for delayed page hydration", async () => {

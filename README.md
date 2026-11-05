@@ -58,6 +58,8 @@ Available template tokens are `{username}`, `{id}`, `{kind}`, `{type}`, `{index}
 
 When metadata export is enabled, the extension writes a JSON sidecar file with available details such as username, identifiers, caption text, timestamps, media URLs, dimensions, and output filenames. If batch report export is enabled, it also writes a report covering skipped files, failures, and profile pagination diagnostics.
 
+Resolver failures include the endpoint family attempted, HTTP status, timeout information, and bounded fallback diagnostics in the popup. Detailed request events are also logged under the `[InstagramSaver]` prefix in the extension service worker console; response bodies are not written to download reports.
+
 Within a single batch, planned filenames are made collision-safe automatically. If the same path already exists from an earlier run, Chrome still decides the final on-disk rename behavior.
 
 ## Permissions

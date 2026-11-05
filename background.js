@@ -456,6 +456,27 @@ function describeHttpFailure(status) {
   return `Instagram request failed with HTTP ${status}.`;
 }
 
+function getRequestEndpoint(url) {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return String(url || "");
+  }
+}
+
+function summarizeResponseShape(body) {
+  if (Array.isArray(body)) {
+    return `array(${body.length})`;
+  }
+
+  if (!body || typeof body !== "object") {
+    return typeof body;
+  }
+
+  return Object.keys(body).slice(0, 12).join(",") || "object";
+}
+
 function formatProfileMediaFilterLabel(profileMediaFilter) {
   if (profileMediaFilter === "images") return "images only";
   if (profileMediaFilter === "videos") return "videos only";
@@ -864,6 +885,8 @@ function getErrorPresentation(err) {
 async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 12000) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = Date.now();
+  const requestLabel = options.requestLabel || null;
 
   try {
     const response = await fetch(url, {
@@ -888,6 +911,10 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 12000) {
         {
           status: response.status,
           url,
+          endpoint: getRequestEndpoint(url),
+          requestLabel,
+          durationMs: Date.now() - startedAt,
+          responseShape: summarizeResponseShape(body),
           response: body,
           retryAfterSeconds
         }
@@ -897,14 +924,30 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 12000) {
     if (typeof body === "string") {
       throw new InstagramResolverError("invalid_response", "Instagram returned a non-JSON response.", {
         url,
+        endpoint: getRequestEndpoint(url),
+        requestLabel,
+        durationMs: Date.now() - startedAt,
         response: body
       });
     }
 
+    logInfo("instagram_request_succeeded", {
+      requestLabel,
+      endpoint: getRequestEndpoint(url),
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      responseShape: summarizeResponseShape(body)
+    });
     return body;
   } catch (err) {
     if (err?.name === "AbortError") {
-      throw new InstagramResolverError("timeout", "Instagram request timed out.", { url, timeoutMs });
+      throw new InstagramResolverError("timeout", "Instagram request timed out.", {
+        url,
+        endpoint: getRequestEndpoint(url),
+        requestLabel,
+        timeoutMs,
+        durationMs: Date.now() - startedAt
+      });
     }
 
     throw err;
@@ -981,12 +1024,19 @@ function parseInstagramUrl(url) {
   return { kind: "unsupported" };
 }
 
-async function extractInstagramPageData(tabId, username, shortcodeLimit = 48) {
+async function extractInstagramPageData(tabId, username, shortcodeLimit = 48, highlightId = null) {
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
-    args: [String(username || "").toLowerCase(), Math.max(1, Number(shortcodeLimit) || 48)],
-    func: (targetUsername, resultLimit) => {
+    args: [
+      String(username || "").toLowerCase(),
+      Math.max(1, Number(shortcodeLimit) || 48),
+      highlightId
+    ],
+    func: (targetUsername, resultLimit, targetHighlightId) => {
+      const requestedHighlightId = typeof targetHighlightId === "undefined"
+        ? null
+        : targetHighlightId;
       const roots = [
         window._sharedData,
         window.__initialData,
@@ -1055,7 +1105,7 @@ async function extractInstagramPageData(tabId, username, shortcodeLimit = 48) {
       const matchingStoryReels = [];
       let visitedCount = 0;
 
-      function visit(value, path, depth) {
+      function visit(value, path, depth, highlightContextId = null) {
         if (!value || typeof value !== "object" || depth > 30 || visited.has(value) || visitedCount >= 100000) {
           return;
         }
@@ -1064,7 +1114,7 @@ async function extractInstagramPageData(tabId, username, shortcodeLimit = 48) {
 
         if (Array.isArray(value)) {
           for (let index = 0; index < value.length; index += 1) {
-            visit(value[index], `${path}[${index}]`, depth + 1);
+            visit(value[index], `${path}[${index}]`, depth + 1, highlightContextId);
           }
           return;
         }
@@ -1081,10 +1131,16 @@ async function extractInstagramPageData(tabId, username, shortcodeLimit = 48) {
 
         const storyOwner = value.user || value.owner;
         const storyItems = Array.isArray(value.items) ? value.items : [];
+        const storyOwnerMatches = targetUsername &&
+          String(storyOwner?.username || "").toLowerCase() === targetUsername;
+        const highlightId = String(value.id || value.pk || value.reel_id || "");
+        const currentHighlightMatches = requestedHighlightId &&
+          (highlightId === String(requestedHighlightId) ||
+            highlightId === `highlight:${requestedHighlightId}`);
+        const highlightMatches = currentHighlightMatches || highlightContextId;
         if (
-          targetUsername &&
-          String(storyOwner?.username || "").toLowerCase() === targetUsername &&
-          (storyOwner.id || storyOwner.pk) &&
+          (storyOwnerMatches || highlightMatches) &&
+          (storyOwner?.id || storyOwner?.pk || highlightMatches) &&
           storyItems.some((item) => item?.pk || item?.id)
         ) {
           matchingStoryReels.push({
@@ -1129,8 +1185,11 @@ async function extractInstagramPageData(tabId, username, shortcodeLimit = 48) {
           }
         }
 
+        const nextHighlightContextId = currentHighlightMatches
+          ? String(requestedHighlightId)
+          : highlightContextId;
         for (const [key, nestedValue] of Object.entries(value)) {
-          visit(nestedValue, path ? `${path}.${key}` : key, depth + 1);
+          visit(nestedValue, path ? `${path}.${key}` : key, depth + 1, nextHighlightContextId);
         }
       }
 
@@ -2457,7 +2516,8 @@ function buildStoryPlan(reel, descriptor, source) {
 async function fetchStoryMediaInfo(storyPk, tabUrl) {
   const url = `${INSTAGRAM_WEB_API_BASE_URL}/media/${encodeURIComponent(storyPk)}/info/`;
   const data = await fetchJsonWithTimeout(url, {
-    headers: getInstagramApiHeaders(tabUrl)
+    headers: getInstagramApiHeaders(tabUrl),
+    requestLabel: "story_media_info"
   });
   const story = data?.items?.find((item) => String(item?.pk || item?.id || "") === String(storyPk));
 
@@ -2473,11 +2533,12 @@ async function fetchStoryMediaInfo(storyPk, tabUrl) {
 }
 
 async function extractStoryPageData(tabId, username) {
+  const highlightId = arguments[2] || null;
   let pageData = null;
   const attempts = 8;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    pageData = await extractInstagramPageData(tabId, username, 1);
+    pageData = await extractInstagramPageData(tabId, username, 1, highlightId);
     if (pageData?.storyReel) {
       return pageData;
     }
@@ -2491,22 +2552,39 @@ async function extractStoryPageData(tabId, username) {
 }
 
 async function resolveStoryPlan(tabUrl, descriptor, tabId = null) {
-  const pageData = tabId && descriptor.kind === "story"
-    ? await extractStoryPageData(tabId, descriptor.username)
-    : null;
+  const diagnostics = [];
+  let pageData = null;
+  if (tabId && (descriptor.kind === "story" || descriptor.kind === "highlight")) {
+    try {
+      pageData = descriptor.kind === "highlight"
+        ? await extractStoryPageData(tabId, "", descriptor.highlightId)
+        : await extractStoryPageData(tabId, descriptor.username);
+      diagnostics.push(pageData?.storyReel
+        ? "Loaded story items from the active Instagram page."
+        : "Active page did not expose story items in its embedded data.");
+    } catch (err) {
+      diagnostics.push("Active-page story extraction failed; continuing with API resolution.");
+      logWarn("story_page_extraction_failed", {
+        descriptor,
+        error: toErrorDetails(err)
+      });
+    }
+  }
   if (pageData?.storyReel) {
     const plan = buildStoryPlan(pageData.storyReel, descriptor, "instagram_story_page_data");
     return {
       ...plan,
       meta: {
         ...plan.meta,
-        pageUrl: tabUrl
+        pageUrl: tabUrl,
+        diagnostics
       }
     };
   }
 
   if (descriptor.kind === "story" && descriptor.storyPk) {
     const story = await fetchStoryMediaInfo(descriptor.storyPk, tabUrl);
+    diagnostics.push("Resolved the requested story frame through the media-info endpoint.");
     const plan = buildStoryPlan(
       { user: story.user, items: [story] },
       descriptor,
@@ -2516,40 +2594,69 @@ async function resolveStoryPlan(tabUrl, descriptor, tabId = null) {
       ...plan,
       meta: {
         ...plan.meta,
-        pageUrl: tabUrl
+        pageUrl: tabUrl,
+        diagnostics
       }
     };
   }
 
-  const reelId = descriptor.kind === "highlight"
-    ? `highlight:${descriptor.highlightId}`
-    : pageData?.user?.id || pageData?.user?.pk
+  let reelIds;
+  if (descriptor.kind === "highlight") {
+    reelIds = [`highlight:${descriptor.highlightId}`, String(descriptor.highlightId)];
+  } else {
+    const userId = pageData?.user?.id || pageData?.user?.pk
       ? String(pageData.user.id || pageData.user.pk)
       : await lookupUserIdByUsername(descriptor.username, tabUrl);
-
-  const reelsUrl = new URL(`${INSTAGRAM_WEB_API_BASE_URL}/feed/reels_media/`);
-  reelsUrl.searchParams.set("reel_ids", reelId);
-  const data = await fetchJsonWithTimeout(reelsUrl.href, {
-    headers: getInstagramApiHeaders(tabUrl)
-  });
-
-  const reel = data?.reels?.[reelId];
-  if (!reel) {
-    throw new InstagramResolverError(
-      "story_unavailable",
-      "Instagram did not return story data for this page. Check that the story or highlight is still available and visible in your account.",
-      { tabUrl, descriptor }
-    );
+    reelIds = [userId];
   }
 
-  const plan = buildStoryPlan(reel, descriptor, "instagram_api_reels_media");
-  return {
-    ...plan,
-    meta: {
-      ...plan.meta,
-      pageUrl: tabUrl
+  for (const reelId of reelIds) {
+    const reelsUrl = new URL(`${INSTAGRAM_WEB_API_BASE_URL}/feed/reels_media/`);
+    reelsUrl.searchParams.set("reel_ids", reelId);
+    try {
+      const data = await fetchJsonWithTimeout(reelsUrl.href, {
+        headers: getInstagramApiHeaders(tabUrl),
+        requestLabel: descriptor.kind === "highlight"
+          ? `highlight_reels_media:${reelId}`
+          : "story_reels_media"
+      });
+      const reelMap = data?.reels && typeof data.reels === "object" ? data.reels : {};
+      const reel = reelMap[reelId] ||
+        reelMap[`highlight:${descriptor.highlightId}`] ||
+        (Object.keys(reelMap).length === 1 ? reelMap[Object.keys(reelMap)[0]] : null);
+      if (!reel) {
+        diagnostics.push(`Endpoint returned no reel for ${reelId}.`);
+        continue;
+      }
+
+      diagnostics.push(`Resolved ${descriptor.kind} through reels-media key ${reelId}.`);
+      const plan = buildStoryPlan(reel, descriptor, "instagram_api_reels_media");
+      return {
+        ...plan,
+        meta: {
+          ...plan.meta,
+          pageUrl: tabUrl,
+          diagnostics
+        }
+      };
+    } catch (err) {
+      diagnostics.push(`${getRequestEndpoint(reelsUrl.href)} failed: ${toErrorDetails(err).message}`);
+      if (isRateLimitError(err)) {
+        throw err;
+      }
+      logWarn("story_reels_media_attempt_failed", {
+        descriptor,
+        reelId,
+        error: toErrorDetails(err)
+      });
     }
-  };
+  }
+
+  throw new InstagramResolverError(
+    "story_unavailable",
+    "Instagram did not return story data for this page. Check that the story or highlight is still available and visible in your account.",
+    { tabUrl, descriptor, diagnostics }
+  );
 }
 
 async function resolveDownloadPlan(tabUrl, settings = null, progressCallback = null, tabId = null) {

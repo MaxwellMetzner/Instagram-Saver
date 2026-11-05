@@ -17,6 +17,8 @@ const errorTitleEl = document.getElementById("error-title");
 const errorMessageEl = document.getElementById("error-message");
 const errorSuggestionEl = document.getElementById("error-suggestion");
 const errorRequestEl = document.getElementById("error-request");
+const errorDiagnosticsBlock = document.getElementById("error-diagnostics-block");
+const errorDiagnosticsListEl = document.getElementById("error-diagnostics-list");
 const downloadButton = document.getElementById("download-button");
 const refreshButton = document.getElementById("refresh-button");
 const settingsButton = document.getElementById("settings-button");
@@ -319,6 +321,14 @@ function renderError(error) {
   setElementText(errorMessageEl, nextMessage);
   setElementText(errorSuggestionEl, nextSuggestion);
   setElementText(errorRequestEl, formatErrorRequest(error));
+  const diagnostics = Array.isArray(error?.diagnostics) ? error.diagnostics.filter(Boolean) : [];
+  errorDiagnosticsListEl.replaceChildren();
+  for (const diagnostic of diagnostics) {
+    const li = document.createElement("li");
+    li.textContent = diagnostic;
+    errorDiagnosticsListEl.appendChild(li);
+  }
+  errorDiagnosticsBlock.classList.toggle("hidden", diagnostics.length === 0);
   batchDiagnosticsBlock.classList.add("hidden");
   crawlButton.classList.add("hidden");
   crawlSummaryEl.classList.add("hidden");
@@ -343,9 +353,20 @@ function formatErrorRequest(error) {
   }
 
   const status = Number(error?.context?.status || 0);
+  const requestLabel = error?.context?.requestLabel;
+  const durationMs = Number(error?.context?.durationMs || 0);
+  const details = [
+    status > 0 ? `HTTP ${status}` : "",
+    requestLabel ? `attempt ${requestLabel}` : "",
+    durationMs > 0 ? `${durationMs}ms` : ""
+  ].filter(Boolean).join(" • ");
+  if (!details) {
+    return `Failed request: ${endpoint}`;
+  }
+
   return status > 0
-    ? `Failed request: HTTP ${status} from ${endpoint}`
-    : `Failed request: ${endpoint}`;
+    ? `Failed request: ${details} from ${endpoint}`
+    : `Failed request: ${details} at ${endpoint}`;
 }
 
 async function requestPreview() {
