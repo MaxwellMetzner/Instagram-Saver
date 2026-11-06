@@ -1,69 +1,100 @@
+// Runs inside Instagram tabs: shows status toasts and the download confirmation prompt.
+// Loaded as a classic content script, so it cannot import shared modules.
+
+const TOAST_COLORS = {
+  info: "#2563eb",
+  success: "#16a34a",
+  error: "#dc2626"
+};
+
+const PAGE_KIND_NAMES = {
+  post: "post",
+  reel: "reel",
+  story: "story",
+  highlight: "highlight",
+  profile: "profile",
+  saved: "saved posts"
+};
+
 let statusToastEl = null;
 let statusToastTimer = null;
+
+function ensureToastElement() {
+  if (statusToastEl?.isConnected) {
+    return statusToastEl;
+  }
+
+  statusToastEl = document.createElement("div");
+  statusToastEl.setAttribute("role", "status");
+  statusToastEl.setAttribute("aria-live", "polite");
+  Object.assign(statusToastEl.style, {
+    position: "fixed",
+    top: "16px",
+    right: "16px",
+    maxWidth: "360px",
+    padding: "10px 14px 10px 12px",
+    borderRadius: "12px",
+    borderLeft: "4px solid transparent",
+    background: "rgba(17, 24, 39, 0.94)",
+    color: "#f9fafb",
+    fontFamily: "system-ui, -apple-system, 'Segoe UI', sans-serif",
+    fontSize: "13px",
+    fontWeight: "500",
+    lineHeight: "1.4",
+    zIndex: "2147483647",
+    boxShadow: "0 12px 32px rgba(0, 0, 0, 0.3)",
+    pointerEvents: "none",
+    opacity: "0",
+    transform: "translateY(-6px)",
+    transition: "opacity 140ms ease, transform 140ms ease"
+  });
+  document.documentElement.appendChild(statusToastEl);
+  return statusToastEl;
+}
 
 function showStatusToast(message, level = "info") {
   if (!message) return;
 
-  if (!statusToastEl) {
-    statusToastEl = document.createElement("div");
-    statusToastEl.style.position = "fixed";
-    statusToastEl.style.top = "16px";
-    statusToastEl.style.right = "16px";
-    statusToastEl.style.padding = "10px 14px";
-    statusToastEl.style.borderRadius = "10px";
-    statusToastEl.style.color = "#fff";
-    statusToastEl.style.fontFamily = "system-ui, -apple-system, Segoe UI, sans-serif";
-    statusToastEl.style.fontSize = "13px";
-    statusToastEl.style.fontWeight = "600";
-    statusToastEl.style.zIndex = "2147483647";
-    statusToastEl.style.boxShadow = "0 8px 24px rgba(0, 0, 0, 0.28)";
-    statusToastEl.style.pointerEvents = "none";
-    statusToastEl.style.opacity = "0";
-    statusToastEl.style.transition = "opacity 120ms ease";
-    document.documentElement.appendChild(statusToastEl);
-  }
+  const toast = ensureToastElement();
+  toast.textContent = message;
+  toast.style.borderLeftColor = TOAST_COLORS[level] || TOAST_COLORS.info;
+  toast.style.opacity = "1";
+  toast.style.transform = "translateY(0)";
 
-  const backgroundByLevel = {
-    info: "rgba(30, 64, 175, 0.95)",
-    success: "rgba(21, 128, 61, 0.95)",
-    error: "rgba(185, 28, 28, 0.95)"
-  };
-
-  statusToastEl.textContent = message;
-  statusToastEl.style.background = backgroundByLevel[level] || backgroundByLevel.info;
-  statusToastEl.style.opacity = "1";
-
-  if (statusToastTimer) {
-    clearTimeout(statusToastTimer);
-  }
-
+  clearTimeout(statusToastTimer);
   statusToastTimer = setTimeout(() => {
-    if (statusToastEl) {
-      statusToastEl.style.opacity = "0";
-    }
-  }, 2800);
+    toast.style.opacity = "0";
+    toast.style.transform = "translateY(-6px)";
+  }, level === "error" ? 5000 : 2800);
+}
+
+function plural(count, word) {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 
 function buildConfirmMessage(summary) {
-  const username = summary?.username ? `@${summary.username}` : "this Instagram page";
-  const kind = summary?.pageKind || "media";
+  const owner = summary?.username ? `@${summary.username}` : "this Instagram page";
+  const kind = PAGE_KIND_NAMES[summary?.pageKind] || "page";
   const totalCount = Number(summary?.totalCount || 0);
   const imageCount = Number(summary?.imageCount || 0);
   const videoCount = Number(summary?.videoCount || 0);
-  const lines = [
-    `Download ${totalCount} file${totalCount === 1 ? "" : "s"} from ${username}?`,
-    "",
-    `Type: ${kind}`,
-    `Images: ${imageCount}`,
-    `Videos: ${videoCount}`
-  ];
+  const current = summary?.downloadScope === "current" ? summary.currentItem : null;
 
-  if (summary?.isFullCrawl) {
+  const heading = current
+    ? `Download item ${current.position} of ${current.total} from ${owner}'s ${kind}?`
+    : `Download ${plural(totalCount, "file")} from ${owner}'s ${kind}?`;
+
+  const lines = [heading, "", `${plural(imageCount, "photo")}, ${plural(videoCount, "video")}`];
+
+  if (current?.method === "assumed") {
+    lines.push("", "Couldn't see which slide is showing, so the first slide will be saved.");
+  }
+
+  if (summary?.isBulk) {
     lines.push(
       "",
-      "This starts the full-page crawl.",
-      "The extension popup may close after this prompt.",
-      "The crawl will keep running in the background until the available posts end or Instagram rate limits it."
+      "This is part of a bulk download. It keeps going in the background",
+      "and pauses on its own if Instagram asks it to slow down."
     );
   }
 

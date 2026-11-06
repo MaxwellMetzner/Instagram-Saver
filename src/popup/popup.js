@@ -1,427 +1,393 @@
-const pageKindPill = document.getElementById("page-kind-pill");
-const headlineEl = document.getElementById("headline");
-const metricsCard = document.getElementById("metrics-card");
-const detailsCard = document.getElementById("details-card");
-const errorCard = document.getElementById("error-card");
-const totalCountEl = document.getElementById("total-count");
-const imageCountEl = document.getElementById("image-count");
-const videoCountEl = document.getElementById("video-count");
-const pageTargetEl = document.getElementById("page-target");
-const resolverSourceEl = document.getElementById("resolver-source");
-const duplicateNoteEl = document.getElementById("duplicate-note");
-const metadataNoteEl = document.getElementById("metadata-note");
-const batchDiagnosticsBlock = document.getElementById("batch-diagnostics-block");
-const batchDiagnosticsListEl = document.getElementById("batch-diagnostics-list");
-const fileListEl = document.getElementById("file-list");
-const errorTitleEl = document.getElementById("error-title");
-const errorMessageEl = document.getElementById("error-message");
-const errorSuggestionEl = document.getElementById("error-suggestion");
-const errorRequestEl = document.getElementById("error-request");
-const errorDiagnosticsBlock = document.getElementById("error-diagnostics-block");
-const errorDiagnosticsListEl = document.getElementById("error-diagnostics-list");
-const downloadButton = document.getElementById("download-button");
-const refreshButton = document.getElementById("refresh-button");
-const settingsButton = document.getElementById("settings-button");
-const crawlButton = document.getElementById("crawl-button");
-const resetCrawlButton = document.getElementById("reset-crawl-button");
-const crawlSummaryEl = document.getElementById("crawl-summary");
-const crawlStatusActionsEl = document.getElementById("crawl-status-actions");
-const crawlDiagnosticsBlock = document.getElementById("crawl-diagnostics-block");
-const crawlDiagnosticsListEl = document.getElementById("crawl-diagnostics-list");
-const statusEl = document.getElementById("status");
-const DEFAULT_THEME_MODE = "light";
+import { MESSAGE_TYPES, sendMessage } from "../shared/messages.js";
+import { DEFAULT_SETTINGS, loadSettings } from "../shared/settings.js";
+import { initTheme } from "../shared/theme.js";
+import {
+  describeBulk,
+  describeDownloadResult,
+  describeDuplicates,
+  describePage,
+  describeQuickDownload,
+  describeSingleChoices,
+  formatErrorRequest,
+  isBulkPage
+} from "./view-model.js";
 
-let activeTab = null;
-let currentPreview = null;
+const BULK_POLL_INTERVAL_MS = 1500;
+const FILE_LIST_LIMIT = 6;
 
-function applyTheme(themeMode) {
-  const resolvedTheme = ["light", "dark", "instagram"].includes(themeMode) ? themeMode : DEFAULT_THEME_MODE;
-  document.documentElement.dataset.theme = resolvedTheme;
+const $ = (id) => document.getElementById(id);
+
+const el = {
+  subtitle: $("page-subtitle"),
+  refresh: $("refresh-button"),
+  settings: $("settings-button"),
+  loadingCard: $("loading-card"),
+  pageCard: $("page-card"),
+  pageKind: $("page-kind-pill"),
+  pageOwner: $("page-owner"),
+  pageTitle: $("page-title"),
+  totalCount: $("total-count"),
+  imageCount: $("image-count"),
+  videoCount: $("video-count"),
+  duplicateCount: $("duplicate-count"),
+  singleCard: $("single-card"),
+  currentButton: $("download-current-button"),
+  currentTitle: $("download-current-title"),
+  currentDetail: $("download-current-detail"),
+  allButton: $("download-all-button"),
+  allTitle: $("download-all-title"),
+  allDetail: $("download-all-detail"),
+  currentNote: $("current-note"),
+  quickCard: $("quick-card"),
+  quickDescription: $("quick-description"),
+  quickButton: $("quick-download-button"),
+  bulkCard: $("bulk-card"),
+  bulkChip: $("bulk-status-chip"),
+  bulkExplainer: $("bulk-explainer"),
+  bulkProgress: $("bulk-progress"),
+  bulkProgressFill: $("bulk-progress-fill"),
+  bulkProgressText: $("bulk-progress-text"),
+  bulkStats: $("bulk-stats"),
+  bulkPosts: $("bulk-posts"),
+  bulkFiles: $("bulk-files"),
+  bulkSkipped: $("bulk-skipped"),
+  bulkDetail: $("bulk-detail"),
+  bulkPrimary: $("bulk-primary-button"),
+  bulkReset: $("bulk-reset-button"),
+  bulkSettingsHint: $("bulk-settings-hint"),
+  errorCard: $("error-card"),
+  errorTitle: $("error-title"),
+  errorMessage: $("error-message"),
+  errorSuggestion: $("error-suggestion"),
+  errorRequest: $("error-request"),
+  errorDiagnostics: $("error-diagnostics-list"),
+  detailsCard: $("details-card"),
+  duplicateNote: $("duplicate-note"),
+  metadataNote: $("metadata-note"),
+  resolverSource: $("resolver-source"),
+  fileList: $("file-list"),
+  batchDiagnosticsBlock: $("batch-diagnostics-block"),
+  batchDiagnosticsList: $("batch-diagnostics-list"),
+  status: $("status")
+};
+
+const state = {
+  tab: null,
+  preview: null,
+  settings: { ...DEFAULT_SETTINGS },
+  busy: false,
+  pollTimer: null
+};
+
+function show(element, visible) {
+  element.classList.toggle("hidden", !visible);
 }
 
-async function loadTheme() {
-  const { themeMode = DEFAULT_THEME_MODE } = await chrome.storage.sync.get({ themeMode: DEFAULT_THEME_MODE });
-  applyTheme(themeMode);
+function setText(element, text) {
+  const value = String(text || "").trim();
+  element.textContent = value;
+  show(element, Boolean(value));
 }
 
 function setStatus(message, isError = false) {
-  statusEl.textContent = message || "";
-  statusEl.classList.toggle("error", Boolean(isError));
+  el.status.textContent = message || "";
+  el.status.classList.toggle("error", Boolean(isError));
+}
+
+function fillList(listElement, lines) {
+  listElement.replaceChildren(...lines.map((line) => {
+    const li = document.createElement("li");
+    li.textContent = line;
+    return li;
+  }));
 }
 
 function setBusy(isBusy) {
-  downloadButton.disabled = isBusy;
-  refreshButton.disabled = isBusy;
-  crawlButton.disabled = isBusy;
-  resetCrawlButton.disabled = isBusy;
+  state.busy = isBusy;
+  for (const button of [el.refresh, el.currentButton, el.allButton, el.quickButton, el.bulkReset]) {
+    button.disabled = isBusy;
+  }
+  if (isBusy) {
+    el.bulkPrimary.disabled = true;
+  } else if (state.preview) {
+    renderBulk(state.preview.bulkJob);
+  }
 }
 
-function setElementText(element, text) {
-  const value = String(text || "").trim();
-  element.textContent = value;
-  element.classList.toggle("hidden", !value);
+function showOnly(...visibleCards) {
+  for (const card of [el.loadingCard, el.pageCard, el.singleCard, el.quickCard, el.bulkCard, el.errorCard, el.detailsCard]) {
+    show(card, visibleCards.includes(card));
+  }
 }
 
-function formatProfileMediaFilterText(profileMediaFilter) {
-  if (profileMediaFilter === "images") return "images only";
-  if (profileMediaFilter === "videos") return "videos only";
-  return "all media";
+function tabPayload() {
+  return { tabId: state.tab?.id, tabUrl: state.tab?.url || "" };
 }
 
-function formatFullCrawlPaceText(fullCrawlPace) {
-  if (fullCrawlPace === "safer") return "safer and slower";
-  if (fullCrawlPace === "aggressive" || fullCrawlPace === "faster") return "aggressive";
-  return "balanced";
-}
-
-function getResumeTimestamp(resumeAfter) {
-  const timestamp = new Date(resumeAfter || "").getTime();
-  return Number.isFinite(timestamp) ? timestamp : null;
-}
-
-function formatResumeAfterText(resumeAfter) {
-  const timestamp = getResumeTimestamp(resumeAfter);
-  if (!timestamp) {
-    return "";
+function openSettings(section = "") {
+  if (!section) {
+    chrome.runtime.openOptionsPage();
+    return;
   }
 
-  const date = new Date(timestamp);
-  const remainingMinutes = Math.max(0, Math.ceil((timestamp - Date.now()) / 60000));
-  const absoluteLabel = date.toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit"
+  chrome.tabs.create({ url: chrome.runtime.getURL(`src/options/options.html#${section}`) });
+}
+
+// ---------- Rendering ----------
+
+function renderPageCard(preview) {
+  const page = describePage(preview);
+  const summary = preview.summary;
+  el.pageKind.textContent = page.kindLabel;
+  el.pageOwner.textContent = page.owner;
+  setText(el.pageTitle, page.title);
+  el.totalCount.textContent = String(summary.totalCount || 0);
+  el.imageCount.textContent = String(summary.imageCount || 0);
+  el.videoCount.textContent = String(summary.videoCount || 0);
+  el.duplicateCount.textContent = String(summary.duplicateCount || 0);
+  show(el.duplicateCount.parentElement, page.showDuplicates);
+}
+
+function renderSingle(preview) {
+  const choices = describeSingleChoices(preview, state.settings.defaultDownloadScope);
+  show(el.currentButton, choices.showCurrent);
+
+  if (choices.current) {
+    el.currentTitle.textContent = choices.current.title;
+    el.currentDetail.textContent = choices.current.detail;
+  }
+  el.allTitle.textContent = choices.all.title;
+  el.allDetail.textContent = choices.all.detail;
+  setText(el.currentNote, choices.note);
+
+  const currentFirst = choices.showCurrent && choices.primary === "current";
+  el.currentButton.classList.toggle("primary", currentFirst);
+  el.allButton.classList.toggle("primary", !currentFirst);
+  // Keep the emphasised option on top.
+  el.currentButton.parentElement.prepend(currentFirst ? el.currentButton : el.allButton);
+}
+
+function renderQuick(preview) {
+  const quick = describeQuickDownload(preview);
+  el.quickDescription.textContent = quick.description;
+  el.quickButton.textContent = quick.buttonLabel;
+  el.quickButton.disabled = state.busy || quick.disabled;
+}
+
+function renderBulk(bulkJob) {
+  const pageKind = state.preview?.summary?.pageKind;
+  if (!isBulkPage(pageKind)) {
+    stopPolling();
+    return;
+  }
+
+  const bulk = describeBulk(pageKind, bulkJob, state.settings);
+  el.bulkExplainer.textContent = bulk.explainer;
+  el.bulkChip.textContent = bulk.chip.label;
+  el.bulkChip.dataset.tone = bulk.chip.tone;
+
+  if (bulk.progress) {
+    show(el.bulkProgress, true);
+    const track = el.bulkProgressFill.parentElement;
+    track.classList.toggle("indeterminate", bulk.progress.percent === null);
+    el.bulkProgressFill.style.width = bulk.progress.percent === null ? "" : `${bulk.progress.percent}%`;
+    el.bulkProgressText.textContent = bulk.progress.text;
+  } else {
+    show(el.bulkProgress, false);
+  }
+
+  if (bulk.stats) {
+    show(el.bulkStats, true);
+    el.bulkPosts.textContent = String(bulk.stats.posts);
+    el.bulkFiles.textContent = String(bulk.stats.files);
+    el.bulkSkipped.textContent = String(bulk.stats.skipped);
+  } else {
+    show(el.bulkStats, false);
+  }
+
+  setText(el.bulkDetail, bulk.isActive ? "" : bulk.detail);
+  el.bulkPrimary.textContent = bulk.primary.label;
+  el.bulkPrimary.dataset.action = bulk.primary.action;
+  el.bulkPrimary.disabled = state.busy || bulk.primary.disabled;
+  show(el.bulkReset, bulk.showReset);
+
+  el.bulkSettingsHint.replaceChildren(`${bulk.settingsHint} · `);
+  const link = document.createElement("a");
+  link.href = "#";
+  link.textContent = "Change";
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    openSettings("bulk");
   });
+  el.bulkSettingsHint.appendChild(link);
 
-  if (remainingMinutes <= 0) {
-    return `${absoluteLabel} (available now)`;
+  if (bulk.isActive) {
+    startPolling();
+  } else {
+    stopPolling();
   }
-
-  return `${absoluteLabel} (${remainingMinutes} min)`;
 }
 
-function updateActionTooltips(preview = null) {
-  const summary = preview?.summary || null;
-  const crawlJob = preview?.crawlJob || null;
+function renderDetails(preview) {
+  const summary = preview.summary;
+  el.duplicateNote.textContent = describeDuplicates(summary);
+  el.metadataNote.textContent = summary.metadataEnabled
+    ? summary.metadataFilename || "Saved alongside the media"
+    : "Off (turn on in Settings)";
+  el.resolverSource.textContent = summary.source || "Instagram";
 
-  if (summary?.pageKind === "profile" || summary?.pageKind === "saved") {
-    const pageLabel = summary.pageKind === "saved" ? "saved page" : "profile";
-    const maxProfilePosts = Math.max(1, Number(summary?.maxProfilePosts || 0)) || 1;
-    const profileMediaFilter = formatProfileMediaFilterText(summary?.profileMediaFilter || crawlJob?.profileMediaFilter || "all");
-    const postLabel = maxProfilePosts === 1 ? "post" : "posts";
-
-    downloadButton.title = `Downloads only the current ${pageLabel} preview: up to ${maxProfilePosts} ${postLabel} using ${profileMediaFilter}. This is a one-time batch and does not continue into older posts.`;
-
-    if (!crawlJob) {
-      crawlButton.title = `Starts a full ${pageLabel} crawl that keeps paging through posts automatically. It saves a checkpoint if the crawl is interrupted or Instagram rate limits the session.`;
-      return;
-    }
-
-    if (crawlJob.status === "completed") {
-      crawlButton.title = `Starts a fresh full ${pageLabel} crawl from the beginning. It will keep paging until the posts end or Instagram rate limits the session.`;
-      return;
-    }
-
-    if (crawlJob.status === "running") {
-      crawlButton.title = "Stops the active full crawl after the current work finishes and keeps the saved checkpoint.";
-      return;
-    }
-
-    if (crawlJob.status === "stopping") {
-      crawlButton.title = "Stop requested. The current crawl will pause after the current work finishes.";
-      return;
-    }
-
-    if (crawlJob.status === "rate_limited") {
-      const resumeAfterText = formatResumeAfterText(crawlJob.resumeAfter);
-      const cooldownActive = Boolean(getResumeTimestamp(crawlJob.resumeAfter) && getResumeTimestamp(crawlJob.resumeAfter) > Date.now());
-      crawlButton.title = cooldownActive && resumeAfterText
-        ? `Resumes the saved full ${pageLabel} crawl after the current cooldown ends at ${resumeAfterText}.`
-        : "Resumes the saved full crawl from the last checkpoint after Instagram rate limited the session.";
-      return;
-    }
-
-    crawlButton.title = `Resumes the saved full ${pageLabel} crawl from the last checkpoint. It keeps paging until the posts end or Instagram rate limits the session.`;
-    return;
-  }
-
-  downloadButton.title = "Download the media resolved for the current Instagram page.";
-  crawlButton.title = "Attempt a full page crawl, saving progress if the crawl is interrupted, paused, or rate limited.";
-}
-
-function isDuplicateErrorText(candidate, seenValues) {
-  const normalized = String(candidate || "").trim().toLowerCase();
-  return !normalized || seenValues.has(normalized);
-}
-
-function renderCrawlJob(preview) {
-  const crawlJob = preview?.crawlJob || null;
-  const supportsCrawl = ["profile", "saved"].includes(preview?.summary?.pageKind);
-
-  crawlButton.classList.toggle("hidden", !supportsCrawl);
-
-  if (!supportsCrawl) {
-    crawlSummaryEl.classList.add("hidden");
-    crawlStatusActionsEl.classList.add("hidden");
-    crawlDiagnosticsBlock.classList.add("hidden");
-    return;
-  }
-
-  if (!crawlJob) {
-    crawlButton.textContent = "Start Full Crawl";
-    crawlSummaryEl.classList.add("hidden");
-    crawlStatusActionsEl.classList.add("hidden");
-    crawlDiagnosticsBlock.classList.add("hidden");
-    return;
-  }
-
-  const resumeTimestamp = getResumeTimestamp(crawlJob.resumeAfter);
-  const cooldownActive = Boolean(resumeTimestamp && resumeTimestamp > Date.now());
-  const cooldownText = formatResumeAfterText(crawlJob.resumeAfter);
-  crawlButton.textContent = crawlJob.status === "completed"
-    ? "Start New Crawl"
-    : crawlJob.status === "running"
-      ? "Stop Crawl"
-      : crawlJob.status === "stopping"
-        ? "Stop Requested"
-        : crawlJob.status === "rate_limited" && cooldownActive
-          ? "Resume After Cooldown"
-          : "Resume Full Crawl";
-  crawlStatusActionsEl.classList.remove("hidden");
-  crawlSummaryEl.classList.remove("hidden");
-  crawlSummaryEl.textContent = crawlJob.statusLine;
-
-  crawlDiagnosticsListEl.replaceChildren();
-  const savedPostsCrawl = preview.summary.pageKind === "saved";
-  const contentLabel = savedPostsCrawl ? "saved posts" : "profile posts";
-  const checkpointLine = crawlJob.status === "stopping"
-    ? "Stop requested. The crawl will pause after the current work finishes."
-    : crawlJob.status === "rate_limited"
-      ? cooldownActive && cooldownText
-        ? "Instagram rate limited the last crawl attempt. Resume after the saved cooldown."
-        : "Instagram rate limited the last crawl attempt. Resume later from the saved checkpoint."
-    : crawlJob.lastBatch?.stopReason === "cancelled_before_download"
-      ? "The current crawl batch is preserved and can be resumed from the saved checkpoint."
-      : crawlJob.lastBatch?.stopReason === "stopped_by_user"
-        ? "The crawl was stopped manually and can be resumed from the saved checkpoint."
-      : crawlJob.hasMore
-        ? `More ${contentLabel} remain after the saved cursor.`
-        : `Saved cursor is at the end of the ${savedPostsCrawl ? "saved page" : "profile"}.`;
-  const diagnostics = [
-    `Status: ${crawlJob.status}.`,
-    `Posts processed: ${crawlJob.totalPostsResolved}.`,
-    `Pending saved post identifiers: ${crawlJob.pendingShortcodes}.`,
-    `Crawl pace: ${formatFullCrawlPaceText(crawlJob.fullCrawlPace)}.`,
-    checkpointLine,
-    crawlJob.lastBatch
-      ? `Last batch processed ${crawlJob.lastBatch.processedPosts} posts and queued ${crawlJob.lastBatch.queued} file${crawlJob.lastBatch.queued === 1 ? "" : "s"}.`
-      : "No crawl batches have been processed yet."
-  ];
-
-  if (cooldownText) {
-    diagnostics.push(`Resume after: ${cooldownText}.`);
-  }
-
-  if (crawlJob.lastError) {
-    diagnostics.push(`Last error: ${crawlJob.lastError}`);
-  }
-
-  crawlDiagnosticsBlock.classList.remove("hidden");
-  for (const line of diagnostics) {
+  const currentIndex = Number.isInteger(preview.current?.index) ? preview.current.index : -1;
+  const rows = preview.items.slice(0, FILE_LIST_LIMIT).map((item, index) => {
     const li = document.createElement("li");
-    li.textContent = line;
-    crawlDiagnosticsListEl.appendChild(li);
+    li.classList.toggle("is-current", index === currentIndex);
+    const type = document.createElement("span");
+    type.className = "file-type";
+    type.textContent = item.type === "video" ? "Video" : "Photo";
+    const name = document.createElement("span");
+    name.className = "file-name";
+    name.textContent = item.filename;
+    name.title = item.filename;
+    li.append(type, name);
+    if (item.alreadyDownloaded || index === currentIndex) {
+      const badge = document.createElement("span");
+      badge.className = "file-badge";
+      badge.textContent = index === currentIndex ? "on screen" : "saved";
+      li.appendChild(badge);
+    }
+    return li;
+  });
+  if (preview.items.length > FILE_LIST_LIMIT) {
+    const more = document.createElement("li");
+    more.className = "muted";
+    more.textContent = `…and ${preview.items.length - FILE_LIST_LIMIT} more`;
+    rows.push(more);
   }
-}
+  el.fileList.replaceChildren(...rows);
 
-async function getActiveInstagramTab() {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  return tabs[0] || null;
+  const diagnostics = Array.isArray(summary.batchDiagnostics) ? summary.batchDiagnostics : [];
+  fillList(el.batchDiagnosticsList, diagnostics);
+  show(el.batchDiagnosticsBlock, diagnostics.length > 0);
 }
 
 function renderPreview(preview) {
-  currentPreview = preview;
-  errorCard.classList.add("hidden");
-  metricsCard.classList.remove("hidden");
-  detailsCard.classList.remove("hidden");
+  state.preview = preview;
+  const bulkPage = isBulkPage(preview.summary.pageKind);
+  showOnly(el.pageCard, bulkPage ? el.quickCard : el.singleCard, ...(bulkPage ? [el.bulkCard] : []), el.detailsCard);
 
-  pageKindPill.textContent = String(preview.summary.pageKind || "media").toUpperCase();
-  headlineEl.textContent = `${preview.summary.totalCount} file${preview.summary.totalCount === 1 ? "" : "s"} ready from @${preview.summary.username || "instagram"}.`;
-  totalCountEl.textContent = String(preview.summary.totalCount || 0);
-  imageCountEl.textContent = String(preview.summary.imageCount || 0);
-  videoCountEl.textContent = String(preview.summary.videoCount || 0);
-  pageTargetEl.textContent = preview.meta.title || `@${preview.summary.username} • ${preview.summary.id}`;
-  resolverSourceEl.textContent = preview.summary.source || "instagram_api";
-  duplicateNoteEl.textContent = preview.summary.duplicateMode === "none"
-    ? "Duplicate suppression is disabled. Previously downloaded files may be downloaded again."
-    : preview.summary.duplicateCount
-      ? `${preview.summary.duplicateCount} file${preview.summary.duplicateCount === 1 ? " is" : "s are"} already in local history and will be skipped.`
-      : "No duplicate downloads detected in local history.";
-  metadataNoteEl.textContent = preview.summary.metadataEnabled
-    ? `Enabled: ${preview.summary.metadataFilename}`
-    : "Disabled in settings";
-
-  batchDiagnosticsListEl.replaceChildren();
-  const batchDiagnostics = Array.isArray(preview.summary.batchDiagnostics) ? preview.summary.batchDiagnostics : [];
-  if (batchDiagnostics.length > 0) {
-    batchDiagnosticsBlock.classList.remove("hidden");
-    for (const line of batchDiagnostics) {
-      const li = document.createElement("li");
-      li.textContent = line;
-      batchDiagnosticsListEl.appendChild(li);
-    }
+  renderPageCard(preview);
+  if (bulkPage) {
+    renderQuick(preview);
+    renderBulk(preview.bulkJob);
   } else {
-    batchDiagnosticsBlock.classList.add("hidden");
+    stopPolling();
+    renderSingle(preview);
   }
-
-  fileListEl.replaceChildren();
-  for (const item of preview.items.slice(0, 3)) {
-    const li = document.createElement("li");
-    li.textContent = `${item.type.toUpperCase()} • ${item.filename}${item.alreadyDownloaded ? " • already downloaded" : ""}`;
-    fileListEl.appendChild(li);
-  }
-
-  if (preview.items.length > 3) {
-    const li = document.createElement("li");
-    li.textContent = `Plus ${preview.items.length - 3} more file${preview.items.length - 3 === 1 ? "" : "s"}.`;
-    fileListEl.appendChild(li);
-  }
-
-  renderCrawlJob(preview);
-  updateActionTooltips(preview);
-
-  setStatus("Ready.");
+  renderDetails(preview);
+  el.subtitle.textContent = "Ready";
 }
 
 function renderError(error) {
-  currentPreview = null;
-  metricsCard.classList.add("hidden");
-  detailsCard.classList.add("hidden");
-  const isUnsupportedPage = error?.code === "unsupported_url";
-  errorCard.classList.toggle("hidden", isUnsupportedPage);
+  state.preview = null;
+  stopPolling();
+  showOnly(el.errorCard);
 
-  pageKindPill.textContent = "ERROR";
-  headlineEl.textContent = "The current page could not be resolved.";
-  const fallbackTitle = error?.title || "Download failed";
-  const seenValues = new Set();
-  setElementText(errorTitleEl, fallbackTitle);
-  seenValues.add(fallbackTitle.trim().toLowerCase());
+  const unsupported = error?.code === "unsupported_url";
+  el.errorCard.classList.toggle("info", unsupported);
+  el.subtitle.textContent = unsupported ? "Nothing to download here" : "Something went wrong";
 
-  const nextMessage = isDuplicateErrorText(error?.message, seenValues) ? "" : error?.message;
-  if (nextMessage) {
-    seenValues.add(nextMessage.trim().toLowerCase());
-  }
+  const title = unsupported ? "Nothing to download on this page" : error?.title || "Something went wrong";
+  const seen = new Set([title.trim().toLowerCase()]);
+  const pick = (text) => {
+    const value = String(text || "").trim();
+    if (!value || seen.has(value.toLowerCase())) return "";
+    seen.add(value.toLowerCase());
+    return value;
+  };
 
-  const resolvedSuggestion = error?.suggestion || "Try reloading the page and checking your Instagram session.";
-  const nextSuggestion = isDuplicateErrorText(resolvedSuggestion, seenValues)
-    ? ""
-    : resolvedSuggestion;
-
-  setElementText(errorMessageEl, nextMessage);
-  setElementText(errorSuggestionEl, nextSuggestion);
-  setElementText(errorRequestEl, formatErrorRequest(error));
+  el.errorTitle.textContent = title;
+  setText(el.errorMessage, pick(error?.message));
+  setText(el.errorSuggestion, pick(error?.suggestion || "Reload the Instagram page and make sure you're logged in."));
+  setText(el.errorRequest, formatErrorRequest(error));
   const diagnostics = Array.isArray(error?.diagnostics) ? error.diagnostics.filter(Boolean) : [];
-  errorDiagnosticsListEl.replaceChildren();
-  for (const diagnostic of diagnostics) {
-    const li = document.createElement("li");
-    li.textContent = diagnostic;
-    errorDiagnosticsListEl.appendChild(li);
-  }
-  errorDiagnosticsBlock.classList.toggle("hidden", diagnostics.length === 0);
-  batchDiagnosticsBlock.classList.add("hidden");
-  crawlButton.classList.add("hidden");
-  crawlSummaryEl.classList.add("hidden");
-  crawlStatusActionsEl.classList.add("hidden");
-  crawlDiagnosticsBlock.classList.add("hidden");
-  updateActionTooltips();
-  setStatus(fallbackTitle, true);
+  fillList(el.errorDiagnostics, diagnostics);
+  show(el.errorDiagnostics, diagnostics.length > 0);
+  setStatus(unsupported ? "" : title, !unsupported);
 }
 
-function formatErrorRequest(error) {
-  const requestUrl = error?.context?.url;
-  if (!requestUrl) {
-    return "";
-  }
+// ---------- Bulk status polling ----------
 
-  let endpoint;
-  try {
-    const parsedUrl = new URL(requestUrl);
-    endpoint = `${parsedUrl.origin}${parsedUrl.pathname}`;
-  } catch {
-    return "";
-  }
-
-  const status = Number(error?.context?.status || 0);
-  const requestLabel = error?.context?.requestLabel;
-  const durationMs = Number(error?.context?.durationMs || 0);
-  const details = [
-    status > 0 ? `HTTP ${status}` : "",
-    requestLabel ? `attempt ${requestLabel}` : "",
-    durationMs > 0 ? `${durationMs}ms` : ""
-  ].filter(Boolean).join(" • ");
-  if (!details) {
-    return `Failed request: ${endpoint}`;
-  }
-
-  return status > 0
-    ? `Failed request: ${details} from ${endpoint}`
-    : `Failed request: ${details} at ${endpoint}`;
+function stopPolling() {
+  clearTimeout(state.pollTimer);
+  state.pollTimer = null;
 }
 
-async function requestPreview() {
+function startPolling() {
+  if (state.pollTimer) return;
+
+  state.pollTimer = setTimeout(async () => {
+    state.pollTimer = null;
+    try {
+      const response = await sendMessage(MESSAGE_TYPES.GET_BULK_STATUS, tabPayload());
+      if (response?.ok && state.preview) {
+        state.preview = { ...state.preview, bulkJob: response.bulkJob };
+        renderBulk(response.bulkJob);
+      }
+    } catch {
+      // The service worker may restart; try again on the next tick.
+      startPolling();
+    }
+  }, BULK_POLL_INTERVAL_MS);
+}
+
+// ---------- Actions ----------
+
+async function getActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab || null;
+}
+
+async function requestPreview({ quiet = false, forceRefresh = false } = {}) {
   setBusy(true);
-  setStatus("Checking current page...");
+  if (!quiet) {
+    showOnly(el.loadingCard);
+    el.subtitle.textContent = "Checking this page…";
+    setStatus("");
+  }
 
   try {
-    activeTab = await getActiveInstagramTab();
-    if (!activeTab?.id) {
-      throw new Error("No active tab was available.");
+    state.tab = await getActiveTab();
+    if (!state.tab?.id) {
+      throw new Error("No active tab was found.");
     }
 
-    const response = await chrome.runtime.sendMessage({
-      type: "GET_PAGE_PREVIEW",
-      tabId: activeTab.id,
-      tabUrl: activeTab.url || ""
-    });
-
-    if (!response?.ok) {
-      renderError(response?.error || { title: "Preview failed", message: "Unknown error." });
-      return;
+    const response = await sendMessage(MESSAGE_TYPES.GET_PAGE_PREVIEW, { ...tabPayload(), forceRefresh });
+    if (response?.ok) {
+      renderPreview(response);
+    } else {
+      renderError(response?.error || { title: "Couldn't check this page", message: "Unknown error." });
     }
-
-    renderPreview(response);
   } catch (error) {
     renderError({
-      title: "Preview failed",
+      title: "Couldn't check this page",
       message: String(error?.message || error),
-      suggestion: "Make sure an Instagram tab is active in the current window."
+      suggestion: "Make sure an Instagram tab is open and active in this window."
     });
   } finally {
     setBusy(false);
   }
 }
 
-async function startDownload() {
-  if (!activeTab?.id) {
-    setStatus("No Instagram tab selected.", true);
-    return;
-  }
+async function downloadPage(scope) {
+  if (!state.tab?.id) return;
 
   setBusy(true);
-  setStatus("Starting download...");
+  setStatus(scope === "current" ? "Finding the item on screen…" : "Starting download…");
 
   try {
-    const response = await chrome.runtime.sendMessage({
-      type: "START_PAGE_DOWNLOAD",
-      tabId: activeTab.id,
-      tabUrl: activeTab.url || ""
-    });
-
+    const response = await sendMessage(MESSAGE_TYPES.START_PAGE_DOWNLOAD, { ...tabPayload(), scope });
     if (response?.ok) {
-      const count = response?.result?.downloaded || 0;
-      setStatus(count === 1 ? "Download queued." : count > 1 ? `Queued ${count} downloads.` : "No new downloads queued.");
-      await requestPreview();
+      await requestPreview({ quiet: true });
+      setStatus(describeDownloadResult(response));
       return;
     }
 
@@ -430,166 +396,91 @@ async function startDownload() {
       return;
     }
 
-    renderError(response?.error || {
-      title: "Download failed",
-      message: "Unknown error.",
-      suggestion: "Try again after reloading the page."
-    });
+    renderError(response?.error || { title: "Download failed", message: "Unknown error." });
   } catch (error) {
     renderError({
       title: "Download failed",
       message: String(error?.message || error),
-      suggestion: "Try again after reloading the page."
+      suggestion: "Reload the Instagram page and try again."
     });
   } finally {
     setBusy(false);
   }
 }
 
-async function startFullCrawl() {
-  if (!activeTab?.id) {
-    setStatus("No Instagram tab selected.", true);
-    return;
-  }
-
-  if (currentPreview?.crawlJob?.status === "running" || currentPreview?.crawlJob?.status === "stopping") {
-    await stopFullCrawl();
-    return;
-  }
-
-  const cooldownTimestamp = getResumeTimestamp(currentPreview?.crawlJob?.resumeAfter);
-  if (currentPreview?.crawlJob?.status === "rate_limited" && cooldownTimestamp && cooldownTimestamp > Date.now()) {
-    setStatus(`Instagram cooldown is active. Resume after ${formatResumeAfterText(currentPreview.crawlJob.resumeAfter)}.`);
-    return;
-  }
+async function runBulkAction(type, pendingMessage) {
+  if (!state.tab?.id) return null;
 
   setBusy(true);
-  setStatus("Starting full crawl. You can close this popup once the crawl begins.");
-
+  setStatus(pendingMessage);
   try {
-    const response = await chrome.runtime.sendMessage({
-      type: "START_FULL_PROFILE_CRAWL",
-      tabId: activeTab.id,
-      tabUrl: activeTab.url || ""
-    });
-
-    if (response?.ok) {
-      if (response?.alreadyRunning || response?.crawlJob?.status === "running") {
-        setStatus("Full crawl is already running. Use Stop Crawl to pause it.");
-      } else if (response?.stopped || response?.crawlJob?.status === "paused") {
-        setStatus("Full crawl paused.");
-      } else if (response?.rateLimited || response?.crawlJob?.status === "rate_limited") {
-        const resumeAfterText = formatResumeAfterText(response?.crawlJob?.resumeAfter);
-        setStatus(resumeAfterText
-          ? `Instagram rate limited the crawl. Resume after ${resumeAfterText}.`
-          : "Instagram rate limited the crawl. Resume later to continue.");
-      } else if (response?.crawlJob?.hasMore) {
-        setStatus("Full crawl paused. Resume later to continue.");
-      } else {
-        setStatus("Full crawl completed.");
-      }
-      await requestPreview();
-      return;
-    }
-
-    if (response?.cancelled) {
-      setStatus("Full crawl paused before any new downloads were queued.");
-      await requestPreview();
-      return;
-    }
-
-    renderError(response?.error || {
-      title: "Full crawl failed",
-      message: "Unknown error.",
-      suggestion: "Try again after reloading the Instagram page."
-    });
-  } catch (error) {
-    renderError({
-      title: "Full crawl failed",
-      message: String(error?.message || error),
-      suggestion: "Try again after reloading the Instagram page."
-    });
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function stopFullCrawl() {
-  if (!activeTab?.id) {
-    setStatus("No Instagram tab selected.", true);
-    return;
-  }
-
-  setBusy(true);
-  setStatus("Stopping full crawl...");
-
-  try {
-    const response = await chrome.runtime.sendMessage({
-      type: "STOP_FULL_PROFILE_CRAWL",
-      tabId: activeTab.id,
-      tabUrl: activeTab.url || ""
-    });
-
+    const response = await sendMessage(type, tabPayload());
     if (!response?.ok) {
-      throw new Error(response?.error?.message || "Could not stop full crawl.");
+      setStatus(response?.error?.message || "That didn't work. Try again.", true);
+      return null;
     }
 
-    setStatus(response?.crawlJob?.status === "stopping" ? "Stop requested. The crawl will pause shortly." : "Full crawl paused.");
-    await requestPreview();
+    if (state.preview) {
+      state.preview = { ...state.preview, bulkJob: response.bulkJob ?? null };
+    }
+    return response;
   } catch (error) {
     setStatus(String(error?.message || error), true);
+    return null;
   } finally {
     setBusy(false);
   }
 }
 
-async function resetFullCrawl() {
-  if (!activeTab?.id) {
-    setStatus("No Instagram tab selected.", true);
-    return;
-  }
-
-  const pageLabel = currentPreview?.summary?.pageKind === "saved" ? "saved page" : "profile";
-  const confirmed = window.confirm(`Reset the saved full crawl job for this ${pageLabel}?`);
-  if (!confirmed) {
-    return;
-  }
-
-  setBusy(true);
-  try {
-    const response = await chrome.runtime.sendMessage({
-      type: "RESET_FULL_PROFILE_CRAWL",
-      tabId: activeTab.id,
-      tabUrl: activeTab.url || ""
-    });
-
-    if (!response?.ok) {
-      throw new Error(response?.error?.message || "Could not reset full crawl.");
+async function onBulkPrimary() {
+  if (el.bulkPrimary.dataset.action === "pause") {
+    const response = await runBulkAction(MESSAGE_TYPES.PAUSE_BULK_DOWNLOAD, "Pausing…");
+    if (response) {
+      setStatus(response.bulkJob?.status === "stopping" ? "Pausing after the current post…" : "Paused.");
     }
+    return;
+  }
 
-    setStatus("Full crawl reset.");
-    await requestPreview();
-  } catch (error) {
-    setStatus(String(error?.message || error), true);
-  } finally {
-    setBusy(false);
+  const response = await runBulkAction(MESSAGE_TYPES.START_BULK_DOWNLOAD, "Starting bulk download…");
+  if (!response) return;
+
+  if (response.rateLimited) {
+    setStatus("Instagram asked us to slow down. Try again after the cool-down.");
+  } else if (response.alreadyRunning) {
+    setStatus("Already running.");
+  } else {
+    setStatus("Running in the background. You can close this popup.");
   }
 }
 
-downloadButton.addEventListener("click", startDownload);
-refreshButton.addEventListener("click", requestPreview);
-settingsButton.addEventListener("click", () => {
-  chrome.runtime.openOptionsPage();
-});
-crawlButton.addEventListener("click", startFullCrawl);
-resetCrawlButton.addEventListener("click", resetFullCrawl);
+async function onBulkReset() {
+  const saved = state.preview?.summary?.pageKind === "saved";
+  const confirmed = window.confirm(
+    `Start the bulk download for ${saved ? "your saved posts" : "this profile"} over from the newest post?\n\nFiles you already downloaded are still skipped if duplicate skipping is on.`
+  );
+  if (!confirmed) return;
 
-updateActionTooltips();
+  const response = await runBulkAction(MESSAGE_TYPES.RESET_BULK_DOWNLOAD, "Resetting…");
+  if (response) {
+    setStatus("Progress cleared. Start whenever you're ready.");
+  }
+}
 
-loadTheme()
-  .catch(() => {
-    applyTheme(DEFAULT_THEME_MODE);
-  })
-  .finally(() => {
-    requestPreview();
-  });
+el.refresh.addEventListener("click", () => requestPreview({ forceRefresh: true }));
+el.settings.addEventListener("click", () => openSettings());
+el.currentButton.addEventListener("click", () => downloadPage("current"));
+el.allButton.addEventListener("click", () => downloadPage("all"));
+el.quickButton.addEventListener("click", () => downloadPage("all"));
+el.bulkPrimary.addEventListener("click", onBulkPrimary);
+el.bulkReset.addEventListener("click", onBulkReset);
+window.addEventListener("pagehide", stopPolling);
+
+(async () => {
+  await initTheme();
+  try {
+    state.settings = await loadSettings();
+  } catch {
+    state.settings = { ...DEFAULT_SETTINGS };
+  }
+  await requestPreview();
+})();

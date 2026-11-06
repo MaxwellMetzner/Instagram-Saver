@@ -1,0 +1,10 @@
+{
+  "name": "instagram-saver",
+  "version": "1.6.0",
+  "private": true,
+  "description": "Chrome extension that downloads Instagram posts, reels, stories, highlights, and profiles.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

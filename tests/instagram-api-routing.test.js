@@ -1,16 +1,32 @@
-const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const test = require("node:test");
+import assert from "node:assert/strict";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
 
-const backgroundSource = fs.readFileSync(
-  path.join(__dirname, "..", "background.js"),
-  "utf8"
-);
-const popupSource = fs.readFileSync(
-  path.join(__dirname, "..", "popup.js"),
-  "utf8"
-);
+import { parseInstagramUrl } from "../src/background/instagram/urls.js";
+import { hasCompleteStoryItems } from "../src/background/instagram/media.js";
+import { formatErrorRequest } from "../src/popup/view-model.js";
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+function collectSources(directory) {
+  return readdirSync(directory)
+    .sort()
+    .flatMap((name) => {
+      const fullPath = join(directory, name);
+      if (statSync(fullPath).isDirectory()) return collectSources(fullPath);
+      return name.endsWith(".js") ? [readFileSync(fullPath, "utf8")] : [];
+    });
+}
+
+// The service worker is split into modules; these source-level checks look across all of them.
+const backgroundSource = collectSources(join(repoRoot, "src", "background")).join("\n");
+
+function extractFunction(signature) {
+  const escaped = signature.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return backgroundSource.match(new RegExp(`${escaped} \\{[\\s\\S]*?\\n\\}`))?.[0];
+}
 
 test("web API requests use the web host with the web app headers", () => {
   assert.match(
@@ -32,9 +48,7 @@ test("profile lookup is built from the web API base", () => {
 });
 
 test("story user lookup uses the owner's profile URL as its API referer", () => {
-  const lookupSource = backgroundSource.match(
-    /async function lookupUserIdByUsername\(username, tabUrl\) \{[\s\S]*?\n\}/
-  )?.[0];
+  const lookupSource = extractFunction("async function lookupUserIdByUsername(username, tabUrl)");
   assert.ok(lookupSource);
   assert.match(lookupSource, /getInstagramApiHeaders\(getProfilePageFetchUrl\(tabUrl, username\)\)/);
 });
@@ -46,14 +60,6 @@ test("Instagram server errors suggest waiting before retrying", () => {
 });
 
 test("download errors show the failed endpoint without query parameters", () => {
-  const formatErrorRequestSource = popupSource.match(
-    /function formatErrorRequest\(error\) \{[\s\S]*?\n\}/
-  )?.[0];
-  assert.ok(formatErrorRequestSource);
-
-  const formatErrorRequest = new Function(
-    `${formatErrorRequestSource}; return formatErrorRequest;`
-  )();
   assert.equal(
     formatErrorRequest({
       context: {
@@ -78,15 +84,13 @@ test("story resolution uses matching story data from the active page before maki
   assert.match(backgroundSource, /const matchingStoryReels = \[\]/);
   assert.match(backgroundSource, /storyOwner\?\.username/);
   assert.match(backgroundSource, /storyReel: matchedStoryReel/);
-  assert.match(backgroundSource, /async function extractStoryPageData\(tabId, username\)/);
-  assert.match(backgroundSource, /await extractStoryPageData\(tabId, descriptor\.username\)/);
-  assert.match(backgroundSource, /if \(pageData\?\.storyReel\) \{\s+const plan = buildStoryPlan\(pageData\.storyReel/);
+  assert.match(backgroundSource, /async function extractStoryPageData\(tabId, username, highlightId = null\)/);
+  assert.match(backgroundSource, /extractStoryPageData\(\s+tabId, descriptor\.username/);
+  assert.match(backgroundSource, /finish\(pageData\.storyReel, "instagram_story_page_data"\)/);
 });
 
-test("story frame fallback uses media info instead of profile and reels-feed lookups", async () => {
-  const helperSource = backgroundSource.match(
-    /async function fetchStoryMediaInfo\(storyPk, tabUrl\) \{[\s\S]*?\n\}/
-  )?.[0];
+test("story frame lookup can identify the owner before requesting the full reel", async () => {
+  const helperSource = extractFunction("async function fetchStoryMediaInfo(storyPk, tabUrl)");
   assert.ok(helperSource);
 
   let requestedUrl = null;
@@ -129,20 +133,17 @@ test("story frame fallback uses media info instead of profile and reels-feed loo
     "https://www.instagram.com/api/v1/media/4020170343087478417/info/"
   );
 
-  const resolveSource = backgroundSource.match(
-    /async function resolveStoryPlan\(tabUrl, descriptor, tabId = null\) \{[\s\S]*?\n\}/
-  )?.[0];
+  const resolveSource = extractFunction("async function resolveStoryPlan(tabUrl, descriptor, tabId = null)");
   assert.ok(resolveSource);
-  assert.match(resolveSource, /if \(descriptor\.kind === "story" && descriptor\.storyPk\) \{\s+const story = await fetchStoryMediaInfo/);
+  assert.match(resolveSource, /if \(descriptor\.storyPk\) \{/);
+  assert.doesNotMatch(resolveSource, /items: \[story\]/);
   assert.ok(
     resolveSource.indexOf("fetchStoryMediaInfo") < resolveSource.indexOf("lookupUserIdByUsername")
   );
 });
 
 test("highlight resolution tries both highlight reel-id formats and records diagnostics", () => {
-  const resolverSource = backgroundSource.match(
-    /async function resolveStoryPlan\(tabUrl, descriptor, tabId = null\) \{[\s\S]*?\n\}/
-  )?.[0];
+  const resolverSource = extractFunction("async function resolveStoryPlan(tabUrl, descriptor, tabId = null)");
   assert.ok(resolverSource);
   assert.match(resolverSource, /`highlight:\$\{descriptor\.highlightId\}`, String\(descriptor\.highlightId\)/);
   assert.match(resolverSource, /requestLabel: descriptor\.kind === "highlight"/);
@@ -218,9 +219,7 @@ test("page extraction finds stories nested in Instagram's reels-media route payl
 });
 
 test("story extraction waits briefly for delayed page hydration", async () => {
-  const helperSource = backgroundSource.match(
-    /async function extractStoryPageData\(tabId, username\) \{[\s\S]*?\n\}/
-  )?.[0];
+  const helperSource = extractFunction("async function extractStoryPageData(tabId, username, highlightId = null)");
   assert.ok(helperSource);
 
   let calls = 0;
@@ -228,15 +227,17 @@ test("story extraction waits briefly for delayed page hydration", async () => {
   const extractStoryPageData = new Function(
     "extractInstagramPageData",
     "sleep",
+    "hasCompleteStoryItems",
     `${helperSource}; return extractStoryPageData;`
   )(
     async (_tabId, _username, _limit) => {
       calls += 1;
-      return calls === 1 ? null : { storyReel: { items: [] } };
+      return calls === 1 ? null : { storyReel: { items: [{ pk: "1" }] } };
     },
     async () => {
       waits += 1;
-    }
+    },
+    hasCompleteStoryItems
   );
 
   const pageData = await extractStoryPageData(1, "nyknicks");
@@ -263,12 +264,6 @@ test("saved all-posts and collection URLs use separately scoped saved-feed pagin
 });
 
 test("saved page URLs parse all-posts and collection identifiers", () => {
-  const parserSource = backgroundSource.match(
-    /function parseInstagramUrl\(url\) \{[\s\S]*?\n\}/
-  )?.[0];
-  assert.ok(parserSource);
-
-  const parseInstagramUrl = new Function(`${parserSource}; return parseInstagramUrl;`)();
   assert.deepEqual(
     parseInstagramUrl("https://www.instagram.com/maxmetzner/saved/all-posts/"),
     { kind: "saved", username: "maxmetzner", collectionId: null }
@@ -284,19 +279,19 @@ test("saved page URLs parse all-posts and collection identifiers", () => {
   );
 });
 
-test("saved post batches and resumable crawls share post resolution without merging profile checkpoints", () => {
+test("saved post batches and resumable bulk downloads share post resolution without merging profile checkpoints", () => {
   assert.match(backgroundSource, /async function resolveSavedPlan/);
   assert.match(backgroundSource, /pageKind: "saved"/);
   assert.match(backgroundSource, /scope: "saved"/);
   assert.match(backgroundSource, /job\.scope === "saved"\s*\?\s*await fetchSavedPostsPage/);
-  assert.match(backgroundSource, /descriptor\.kind === "saved"\)\s*\{\s*crawlJob = await createFullSavedCrawlJob/);
+  assert.match(backgroundSource, /descriptor\.kind === "saved"\)\s*\{\s*job = await createSavedBulkJob/);
 });
 
 test("story URLs resolve all current story items instead of filtering to the URL item", () => {
-  const storyPlan = backgroundSource.match(/function buildStoryPlan\(reel, descriptor, source\) \{([\s\S]*?)\n\}/)?.[1];
+  const storyPlan = extractFunction("function buildStoryPlan(reel, descriptor, source)");
   assert.ok(storyPlan);
-  assert.match(storyPlan, /descriptor\.kind === "story" \|\| !descriptor\.storyPk/);
-  assert.match(storyPlan, /\? reelItems\s+: reelItems\.filter/);
+  assert.match(storyPlan, /const items = reelItems\.map/);
+  assert.doesNotMatch(storyPlan, /reelItems\.filter/);
 });
 
 test("rate limits stop post and profile fallback requests", () => {

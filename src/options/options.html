@@ -1,600 +1,284 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Instagram Saver Settings</title>
-    <style>
-      :root {
-        --bg: #fff7fb;
-        --surface: rgba(255, 255, 255, 0.92);
-        --panel: rgba(255, 255, 255, 0.94);
-        --panel-strong: #ffffff;
-        --text: #24152f;
-        --muted: #6f5f7d;
-        --accent: #c2185b;
-        --accent-strong: #7b1fa2;
-        --secondary: #f59e0b;
-        --secondary-strong: #ec4899;
-        --border: rgba(123, 31, 162, 0.12);
-        --shadow: 0 24px 60px rgba(104, 33, 122, 0.16);
-        --hero-gradient: linear-gradient(135deg, rgba(255, 214, 10, 0.3), rgba(244, 114, 182, 0.18) 45%, rgba(123, 31, 162, 0.22));
-        --surface-gradient: linear-gradient(155deg, rgba(255, 248, 225, 0.95), rgba(252, 228, 236, 0.92) 54%, rgba(243, 229, 245, 0.95));
-        --card-gradient: linear-gradient(160deg, rgba(255, 236, 179, 0.72), rgba(252, 228, 236, 0.86) 50%, rgba(243, 229, 245, 0.9));
-      }
-
-      html[data-theme="light"] {
-        --bg: #f5f7fb;
-        --surface: rgba(255, 255, 255, 0.96);
-        --panel: rgba(255, 255, 255, 0.96);
-        --panel-strong: #ffffff;
-        --text: #18212b;
-        --muted: #647181;
-        --accent: #2563eb;
-        --accent-strong: #1d4ed8;
-        --secondary: #0891b2;
-        --secondary-strong: #0f766e;
-        --border: rgba(37, 99, 235, 0.12);
-        --shadow: 0 22px 52px rgba(15, 23, 42, 0.1);
-        --hero-gradient: linear-gradient(135deg, rgba(219, 234, 254, 0.95), rgba(240, 249, 255, 0.96) 55%, rgba(236, 253, 245, 0.94));
-        --surface-gradient: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96));
-        --card-gradient: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96));
-      }
-
-      html[data-theme="dark"] {
-        --bg: #0f1117;
-        --surface: rgba(24, 28, 39, 0.94);
-        --panel: rgba(17, 20, 29, 0.96);
-        --panel-strong: #171b25;
-        --text: #f3f4f6;
-        --muted: #a8b0c0;
-        --accent: #f472b6;
-        --accent-strong: #c084fc;
-        --secondary: #f59e0b;
-        --secondary-strong: #fb7185;
-        --border: rgba(192, 132, 252, 0.18);
-        --shadow: 0 28px 70px rgba(0, 0, 0, 0.42);
-        --hero-gradient: linear-gradient(180deg, rgba(29, 34, 46, 0.98), rgba(20, 24, 34, 0.96));
-        --surface-gradient: linear-gradient(180deg, rgba(27, 32, 45, 0.98), rgba(19, 23, 34, 0.96));
-        --card-gradient: linear-gradient(180deg, rgba(24, 28, 39, 0.98), rgba(18, 21, 31, 0.96));
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      body {
-        margin: 0;
-        min-height: 100vh;
-        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-        background:
-          radial-gradient(circle at top left, rgba(255, 214, 10, 0.28), transparent 34%),
-          radial-gradient(circle at center right, rgba(244, 114, 182, 0.18), transparent 40%),
-          radial-gradient(circle at bottom left, rgba(123, 31, 162, 0.16), transparent 34%),
-          var(--bg);
-        color: var(--text);
-      }
-
-      main {
-        max-width: 1100px;
-        margin: 0 auto;
-        padding: 40px 24px 56px;
-      }
-
-      .panel {
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(255, 250, 252, 0.93));
-        border: 1px solid var(--border);
-        border-radius: 32px;
-        box-shadow: var(--shadow);
-        padding: 32px;
-        -webkit-backdrop-filter: blur(14px);
-        backdrop-filter: blur(14px);
-      }
-
-      html[data-theme="dark"] .panel {
-        background: linear-gradient(180deg, rgba(18, 21, 31, 0.98), rgba(13, 16, 24, 0.96));
-      }
-
-      .hero {
-        display: grid;
-        grid-template-columns: minmax(0, 1.6fr) minmax(260px, 0.9fr);
-        gap: 20px;
-        align-items: stretch;
-        margin-bottom: 28px;
-      }
-
-      .hero-card,
-      .summary-card,
-      .section-card {
-        border-radius: 26px;
-        border: 1px solid rgba(194, 24, 91, 0.1);
-        background: var(--card-gradient);
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
-      }
-
-      .hero-card {
-        padding: 28px;
-        background: var(--hero-gradient);
-      }
-
-      html[data-theme="dark"] .hero-card {
-        border-color: rgba(192, 132, 252, 0.16);
-      }
-
-      .summary-card {
-        padding: 24px;
-        display: grid;
-        gap: 16px;
-      }
-
-      h1 {
-        margin: 0 0 12px;
-        font-size: clamp(2.3rem, 4vw, 3.4rem);
-        line-height: 1;
-        letter-spacing: -0.04em;
-        font-weight: 700;
-      }
-
-      p {
-        margin: 0;
-        color: var(--muted);
-        line-height: 1.6;
-      }
-
-      .eyebrow {
-        display: inline-flex;
-        align-items: center;
-        padding: 7px 12px;
-        border-radius: 999px;
-        margin-bottom: 18px;
-        font-size: 0.78rem;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: #8e145d;
-        background: rgba(255, 255, 255, 0.78);
-        box-shadow: inset 0 0 0 1px rgba(194, 24, 91, 0.12);
-      }
-
-      html[data-theme="light"] .eyebrow {
-        color: #1d4ed8;
-        box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.12);
-      }
-
-      html[data-theme="dark"] .eyebrow {
-        color: #f9a8d4;
-        background: rgba(17, 20, 29, 0.72);
-        box-shadow: inset 0 0 0 1px rgba(244, 114, 182, 0.18);
-      }
-
-      .hero-copy {
-        display: grid;
-        gap: 18px;
-      }
-
-      html[data-theme="dark"] .summary-card,
-      html[data-theme="dark"] .section-card {
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-      }
-
-      .summary-item {
-        display: grid;
-        gap: 4px;
-        padding-bottom: 14px;
-        border-bottom: 1px solid rgba(123, 31, 162, 0.12);
-      }
-
-      .summary-item:last-child {
-        padding-bottom: 0;
-        border-bottom: 0;
-      }
-
-      .summary-item strong {
-        font-size: 0.85rem;
-        font-weight: 700;
-      }
-
-      .form-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 20px;
-      }
-
-      .section-card {
-        padding: 22px;
-        display: grid;
-        gap: 18px;
-      }
-
-      .section-card.full-width {
-        grid-column: 1 / -1;
-      }
-
-      .section-heading {
-        display: grid;
-        gap: 6px;
-      }
-
-      .section-heading h2 {
-        margin: 0;
-        font-size: 1.15rem;
-        line-height: 1.2;
-      }
-
-      .section-heading p {
-        font-size: 0.93rem;
-      }
-
-      .field-list {
-        display: grid;
-        gap: 14px;
-      }
-
-      .field {
-        padding: 16px 18px;
-        border-radius: 20px;
-        background: linear-gradient(160deg, rgba(255, 252, 244, 0.98), rgba(252, 228, 236, 0.82) 55%, rgba(243, 229, 245, 0.9));
-        border: 1px solid rgba(123, 31, 162, 0.1);
-      }
-
-      html[data-theme="light"] .field {
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(248, 250, 252, 0.97));
-        border-color: rgba(37, 99, 235, 0.1);
-      }
-
-      html[data-theme="dark"] .field {
-        background: linear-gradient(180deg, rgba(31, 36, 49, 0.98), rgba(22, 26, 37, 0.96));
-        border-color: rgba(192, 132, 252, 0.16);
-      }
-
-      .field label {
-        display: block;
-        font-size: 0.95rem;
-        font-weight: 700;
-        margin-bottom: 8px;
-      }
-
-      .field small {
-        display: block;
-        margin-top: 8px;
-        color: var(--muted);
-        line-height: 1.5;
-      }
-
-      input[type="text"],
-      input[type="number"],
-      select {
-        width: 100%;
-        padding: 12px 14px;
-        font: inherit;
-        border-radius: 14px;
-        border: 1px solid rgba(123, 31, 162, 0.16);
-        background: #fff;
-        color: var(--text);
-      }
-
-      html[data-theme="dark"] input[type="text"],
-      html[data-theme="dark"] input[type="number"],
-      html[data-theme="dark"] select {
-        background: rgba(17, 20, 29, 0.92);
-      }
-
-      input[type="text"]:focus,
-      input[type="number"]:focus,
-      select:focus {
-        outline: 2px solid rgba(194, 24, 91, 0.18);
-        border-color: rgba(123, 31, 162, 0.26);
-      }
-
-      html[data-theme="light"] input[type="text"]:focus,
-      html[data-theme="light"] input[type="number"]:focus,
-      html[data-theme="light"] select:focus {
-        outline: 2px solid rgba(37, 99, 235, 0.18);
-        border-color: rgba(37, 99, 235, 0.24);
-      }
-
-      .checkbox {
-        display: flex;
-        align-items: start;
-        gap: 12px;
-      }
-
-      .checkbox input {
-        margin-top: 4px;
-        transform: scale(1.15);
-      }
-
-      .actions {
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 14px;
-        margin-top: 24px;
-      }
-
-      button {
-        border: 0;
-        border-radius: 999px;
-        padding: 12px 20px;
-        font: inherit;
-        font-weight: 700;
-        cursor: pointer;
-        color: #fff;
-        background: linear-gradient(135deg, #f59e0b, #ec4899 48%, #7b1fa2);
-        box-shadow: 0 10px 18px rgba(15, 23, 42, 0.08);
-      }
-
-      html[data-theme="light"] button {
-        background: linear-gradient(135deg, #2563eb, #0ea5e9 52%, #14b8a6);
-      }
-
-      html[data-theme="dark"] button {
-        background: linear-gradient(135deg, #fb7185, #f472b6 48%, #a855f7);
-      }
-
-      .button-ghost {
-        color: var(--text);
-        background: rgba(255, 255, 255, 0.84);
-        border: 1px solid rgba(194, 24, 91, 0.12);
-        box-shadow: none;
-      }
-
-      html[data-theme="dark"] .button-ghost {
-        background: rgba(20, 24, 34, 0.92);
-        border-color: rgba(192, 132, 252, 0.18);
-      }
-
-      .utility-actions {
-        display: flex;
-        gap: 12px;
-        flex-wrap: wrap;
-      }
-
-      .utility-grid {
-        display: grid;
-        gap: 14px;
-      }
-
-      #status {
-        color: var(--muted);
-        min-height: 1.5em;
-      }
-
-      code {
-        font-family: "Cascadia Code", Consolas, monospace;
-        font-size: 0.95em;
-      }
-
-      @media (max-width: 900px) {
-        .hero,
-        .form-grid {
-          grid-template-columns: 1fr;
-        }
-      }
-
-      @media (max-width: 640px) {
-        main {
-          padding: 20px 12px 32px;
-        }
-
-        .panel {
-          padding: 18px;
-        }
-
-        .hero-card,
-        .summary-card,
-        .section-card {
-          border-radius: 22px;
-        }
-      }
-    </style>
+    <title>Instagram Saver · Settings</title>
+    <link rel="stylesheet" href="../shared/theme.css">
+    <link rel="stylesheet" href="options.css">
+    <script type="module" src="options.js"></script>
   </head>
   <body>
-    <main>
-      <section class="panel">
-        <section class="hero">
-          <section class="hero-card">
-            <span class="eyebrow">Material Refresh</span>
-            <div class="hero-copy">
-              <h1>Instagram Saver</h1>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="brand">
+          <img src="../../icons/icon48.png" alt="" width="32" height="32">
+          <div>
+            <p class="brand-name">Instagram Saver</p>
+            <p class="brand-sub">Settings</p>
+          </div>
+        </div>
+        <nav class="nav" aria-label="Settings sections">
+          <a href="#general" class="nav-link">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+            General
+          </a>
+          <a href="#single" class="nav-link">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>
+            Posts &amp; stories
+          </a>
+          <a href="#bulk" class="nav-link">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+            Profiles &amp; saved
+          </a>
+          <a href="#files" class="nav-link">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            Files &amp; folders
+          </a>
+          <a href="#extras" class="nav-link">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>
+            Info files
+          </a>
+          <a href="#history" class="nav-link">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg>
+            History
+          </a>
+        </nav>
+        <p class="sidebar-note">Changes save automatically.</p>
+      </aside>
+
+      <main class="content">
+        <header class="content-header">
+          <h1>Settings</h1>
+          <span id="save-state" class="save-state" data-state="idle" role="status" aria-live="polite"></span>
+        </header>
+
+        <form id="settings-form" autocomplete="off" novalidate>
+          <!-- General -->
+          <section id="general" class="section">
+            <div class="section-head">
+              <h2>General</h2>
+              <p>How the extension looks and what clicking its icon does.</p>
+            </div>
+            <div class="card">
+              <div class="row">
+                <div class="row-text">
+                  <p class="row-title">Theme</p>
+                  <p class="row-help">System follows your computer's light or dark setting.</p>
+                </div>
+                <div class="segmented" role="radiogroup" aria-label="Theme">
+                  <label><input type="radio" name="themeMode" value="system"><span>System</span></label>
+                  <label><input type="radio" name="themeMode" value="light"><span>Light</span></label>
+                  <label><input type="radio" name="themeMode" value="dark"><span>Dark</span></label>
+                  <label><input type="radio" name="themeMode" value="instagram"><span>Instagram</span></label>
+                </div>
+              </div>
+              <label class="row">
+                <span class="row-text">
+                  <span class="row-title">One-click downloads</span>
+                  <span class="row-help">Clicking the toolbar icon downloads straight away instead of opening the popup. Right-click the page for the other option.</span>
+                </span>
+                <span class="switch"><input type="checkbox" name="easyMode"><span class="switch-track"></span></span>
+              </label>
+              <label class="row">
+                <span class="row-text">
+                  <span class="row-title">Skip files you already have</span>
+                  <span class="row-help">Remembers what you've downloaded and skips it next time. Turn off to always download again.</span>
+                </span>
+                <span class="switch"><input type="checkbox" name="duplicateMode" data-on="history" data-off="none"><span class="switch-track"></span></span>
+              </label>
+            </div>
+          </section>
+
+          <!-- Single pages -->
+          <section id="single" class="section">
+            <div class="section-head">
+              <h2>Posts &amp; stories</h2>
+              <p>For a single post, reel, story, or highlight. Carousels and stories can hold several photos and videos.</p>
+            </div>
+            <div class="card">
+              <div class="row row-stack">
+                <div class="row-text">
+                  <p class="row-title">Default download</p>
+                  <p class="row-help">Used for one-click downloads, and highlighted first in the popup. You can always pick the other option in the popup or right-click menu.</p>
+                </div>
+                <div class="option-cards" role="radiogroup" aria-label="Default download">
+                  <label class="option-card">
+                    <input type="radio" name="defaultDownloadScope" value="all">
+                    <span class="option-card-title">Everything on the page</span>
+                    <span class="option-card-help">Every slide in a carousel, or every story from that account.</span>
+                  </label>
+                  <label class="option-card">
+                    <input type="radio" name="defaultDownloadScope" value="current">
+                    <span class="option-card-title">Only what's on screen</span>
+                    <span class="option-card-help">Just the slide, story, or highlight frame you're looking at.</span>
+                  </label>
+                </div>
+              </div>
+              <label class="row">
+                <span class="row-text">
+                  <span class="row-title">Ask before downloading</span>
+                  <span class="row-help">Shows a short summary on the Instagram page before anything is saved.</span>
+                </span>
+                <span class="switch"><input type="checkbox" name="confirmBeforeDownload"><span class="switch-track"></span></span>
+              </label>
+              <label class="row">
+                <span class="row-text">
+                  <span class="row-title">Choose where to save single files</span>
+                  <span class="row-help">Opens the "Save as" window when only one file is being downloaded.</span>
+                </span>
+                <span class="switch"><input type="checkbox" name="promptForSingleDownload"><span class="switch-track"></span></span>
+              </label>
+            </div>
+          </section>
+
+          <!-- Profiles & saved -->
+          <section id="bulk" class="section">
+            <div class="section-head">
+              <h2>Profiles &amp; saved posts</h2>
               <p>
-                This extension is API-first. These settings shape download flow, naming, and metadata behavior without
-                changing how Instagram media is resolved.
+                <strong>Quick download</strong> saves the newest posts in one go.
+                <strong>Bulk download</strong> works through every post in the background and can be paused and resumed.
               </p>
             </div>
+            <div class="card">
+              <div class="row">
+                <div class="row-text">
+                  <label class="row-title" for="maxProfilePosts">Posts in a quick download</label>
+                  <p class="row-help">How many of the newest posts to include, from <span id="limit-min">1</span> to <span id="limit-max">200</span>.</p>
+                </div>
+                <div class="stepper">
+                  <button type="button" class="icon-button" data-step="-1" aria-label="Fewer posts">−</button>
+                  <input id="maxProfilePosts" name="maxProfilePosts" class="input stepper-input" type="number" inputmode="numeric" min="1" max="200" step="1">
+                  <button type="button" class="icon-button" data-step="1" aria-label="More posts">+</button>
+                </div>
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <p class="row-title">What to include</p>
+                  <p class="row-help">Applies to quick and bulk downloads.</p>
+                </div>
+                <div class="segmented" role="radiogroup" aria-label="What to include">
+                  <label><input type="radio" name="profileMediaFilter" value="all"><span>Photos &amp; videos</span></label>
+                  <label><input type="radio" name="profileMediaFilter" value="images"><span>Photos</span></label>
+                  <label><input type="radio" name="profileMediaFilter" value="videos"><span>Videos</span></label>
+                </div>
+              </div>
+              <div class="row row-stack">
+                <div class="row-text">
+                  <p class="row-title">Bulk download speed</p>
+                  <p class="row-help">Instagram limits how fast accounts can load posts. When it says "slow down", the bulk download pauses and tells you when it can continue.</p>
+                </div>
+                <div class="segmented" role="radiogroup" aria-label="Bulk download speed">
+                  <label><input type="radio" name="bulkPace" value="safer"><span>Gentle</span></label>
+                  <label><input type="radio" name="bulkPace" value="balanced"><span>Balanced</span></label>
+                  <label><input type="radio" name="bulkPace" value="aggressive"><span>Fast</span></label>
+                </div>
+                <p id="pace-description" class="callout"></p>
+              </div>
+            </div>
           </section>
 
-          <aside class="summary-card">
-            <div class="summary-item">
-              <strong>Download behavior</strong>
-              <p>Easy mode, confirmation prompts, and duplicate handling control how quickly actions run.</p>
+          <!-- Files -->
+          <section id="files" class="section">
+            <div class="section-head">
+              <h2>Files &amp; folders</h2>
+              <p>Where downloads go inside your browser's Downloads folder, and what they're called.</p>
             </div>
-            <div class="summary-item">
-              <strong>Archive output</strong>
-              <p>Folder, media, and metadata templates keep your saved batches consistent.</p>
+            <div class="card">
+              <div class="row row-stack">
+                <label class="row-title" for="folderTemplate">Folder</label>
+                <input id="folderTemplate" name="folderTemplate" class="input mono template-input" type="text" spellcheck="false">
+              </div>
+              <div class="row row-stack">
+                <label class="row-title" for="filenameTemplate">File name</label>
+                <input id="filenameTemplate" name="filenameTemplate" class="input mono template-input" type="text" spellcheck="false">
+              </div>
+              <div class="row row-stack">
+                <p class="row-title">Placeholders</p>
+                <p class="row-help">Click one to add it to the field you were last editing.</p>
+                <div id="token-list" class="tokens"></div>
+              </div>
+              <div class="row row-stack preview-row">
+                <p class="row-title">Example</p>
+                <ul id="filename-preview" class="filename-preview"></ul>
+              </div>
             </div>
-            <div class="summary-item">
-              <strong>Utilities</strong>
-              <p>History export and cleanup stay available, but they live in a dedicated tools section.</p>
-            </div>
-          </aside>
-        </section>
-
-        <form id="settings-form">
-          <section class="form-grid">
-            <section class="section-card">
-              <div class="section-heading">
-                <h2>Download Flow</h2>
-                <p>Choose how direct the toolbar action should feel before a download starts.</p>
-              </div>
-              <div class="field-list">
-                <div class="field checkbox">
-                  <input id="easyMode" name="easyMode" type="checkbox">
-                  <div>
-                    <label for="easyMode">Easy mode: left-click downloads immediately</label>
-                    <small>Disables the popup on left click, starts the current page download directly, and uses a quick green OK or red NO badge to show whether the current Instagram page is downloadable.</small>
-                  </div>
-                </div>
-
-                <div class="field checkbox">
-                  <input id="confirmBeforeDownload" name="confirmBeforeDownload" type="checkbox">
-                  <div>
-                    <label for="confirmBeforeDownload">Confirm before starting a download</label>
-                    <small>Shows a confirmation prompt for direct downloads. Full-page crawls begin immediately.</small>
-                  </div>
-                </div>
-
-                <div class="field checkbox">
-                  <input id="promptForSingleDownload" name="promptForSingleDownload" type="checkbox">
-                  <div>
-                    <label for="promptForSingleDownload">Prompt for location on single-file downloads</label>
-                    <small>Multi-file downloads always queue without prompting to avoid blocking the batch.</small>
-                  </div>
-                </div>
-
-                <div class="field">
-                  <label for="duplicateMode">Duplicate handling</label>
-                  <select id="duplicateMode" name="duplicateMode">
-                    <option value="history">Skip files already recorded in local history</option>
-                    <option value="none">Always download again even if seen before</option>
-                  </select>
-                  <small>Controls whether prior downloads suppress repeated downloads across separate runs.</small>
-                </div>
-              </div>
-            </section>
-
-            <section class="section-card">
-              <div class="section-heading">
-                <h2>Profile And Saved Downloads</h2>
-                <p>Set the scope for profile and saved-post batches without affecting individual posts, reels, or stories.</p>
-              </div>
-              <div class="field-list">
-                <div class="field">
-                  <label for="maxProfilePosts">Maximum posts per batch run</label>
-                  <input id="maxProfilePosts" name="maxProfilePosts" type="number" min="1" max="200" step="1" placeholder="24">
-                  <small>Used on Instagram profile and saved-post pages. The extension resolves posts through the authenticated APIs and downloads each post's media.</small>
-                </div>
-
-                <div class="field">
-                  <label for="profileMediaFilter">Profile media filter</label>
-                  <select id="profileMediaFilter" name="profileMediaFilter">
-                    <option value="all">Download all media</option>
-                    <option value="images">Download images only</option>
-                    <option value="videos">Download videos only</option>
-                  </select>
-                  <small>Applies to profile and saved-post batches. Posts, reels, stories, and highlights keep their native media mix.</small>
-                </div>
-
-                <div class="field">
-                  <label for="fullCrawlPace">Full crawl pace</label>
-                  <select id="fullCrawlPace" name="fullCrawlPace">
-                    <option value="safer">Safer and slower</option>
-                    <option value="balanced">Balanced</option>
-                    <option value="aggressive">Aggressive</option>
-                  </select>
-                  <small>Applies to full profile and saved-post crawls. Slower pacing spaces out Instagram requests more aggressively, while aggressive pacing runs faster but is more likely to hit Instagram throttling.</small>
-                </div>
-              </div>
-            </section>
-
-            <section class="section-card">
-              <div class="section-heading">
-                <h2>Metadata And Reports</h2>
-                <p>Keep richer archive context when you want more than just the media files.</p>
-              </div>
-              <div class="field-list">
-                <div class="field checkbox">
-                  <input id="saveMetadataSidecar" name="saveMetadataSidecar" type="checkbox">
-                  <div>
-                    <label for="saveMetadataSidecar">Save metadata sidecar JSON</label>
-                    <small>Writes a JSON file alongside the media with identifiers, timestamps, filenames, and source info.</small>
-                  </div>
-                </div>
-
-                <div class="field checkbox">
-                  <input id="placeMetadataInSubfolder" name="placeMetadataInSubfolder" type="checkbox">
-                  <div>
-                    <label for="placeMetadataInSubfolder">Place metadata sidecar in a metadata subfolder</label>
-                    <small>Keeps sidecar JSON files out of the main media folder while still preserving them.</small>
-                  </div>
-                </div>
-
-                <div class="field checkbox">
-                  <input id="exportBatchReport" name="exportBatchReport" type="checkbox">
-                  <div>
-                    <label for="exportBatchReport">Export batch report JSON</label>
-                    <small>Writes a small report file with pagination diagnostics, skipped items, and failed items for each download run.</small>
-                  </div>
-                </div>
-
-                <div class="field checkbox">
-                  <input id="exportPostComments" name="exportPostComments" type="checkbox">
-                  <div>
-                    <label for="exportPostComments">Include current-post comments in metadata when available</label>
-                    <small>Best-effort comment export for individual posts and reels only. Profile batch downloads do not fetch comments.</small>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section class="section-card">
-              <div class="section-heading">
-                <h2>Naming Templates</h2>
-                <p>Use the shared tokens below to keep folders and filenames predictable across every run.</p>
-              </div>
-              <div class="field-list">
-                <div class="field">
-                  <label for="folderTemplate">Folder template</label>
-                  <input id="folderTemplate" name="folderTemplate" type="text" placeholder="instagram/{username}">
-                  <small>Available tokens for this field: <code>{username}</code>, <code>{id}</code>, <code>{kind}</code>, <code>{type}</code>, <code>{index}</code>, <code>{date}</code></small>
-                </div>
-
-                <div class="field">
-                  <label for="filenameTemplate">Media filename template</label>
-                  <input id="filenameTemplate" name="filenameTemplate" type="text" placeholder="{username}_{id}_{index}">
-                  <small>Available tokens for this field: <code>{username}</code>, <code>{id}</code>, <code>{kind}</code>, <code>{type}</code>, <code>{index}</code>, <code>{date}</code>. Extension is added automatically.</small>
-                </div>
-
-                <div class="field">
-                  <label for="metadataFilenameTemplate">Metadata filename template</label>
-                  <input id="metadataFilenameTemplate" name="metadataFilenameTemplate" type="text" placeholder="{username}_{id}_metadata">
-                  <small>Available tokens for this field: <code>{username}</code>, <code>{id}</code>, <code>{kind}</code>, <code>{type}</code>, <code>{index}</code>, <code>{date}</code>. Used when metadata sidecar export is enabled.</small>
-                </div>
-              </div>
-            </section>
-
-            <section class="section-card full-width">
-              <div class="section-heading">
-                <h2>Utilities</h2>
-                <p>Theme selection and maintenance actions for local download history.</p>
-              </div>
-              <div class="utility-grid">
-                <div class="field">
-                  <label for="themeMode">Theme mode</label>
-                  <select id="themeMode" name="themeMode">
-                    <option value="dark">Dark</option>
-                    <option value="instagram">Instagram</option>
-                    <option value="light">Light</option>
-                  </select>
-                  <small>Applies to the popup and this settings page immediately after save.</small>
-                </div>
-
-                <div class="utility-actions">
-                  <button class="button-ghost" id="export-history-button" type="button">Export history</button>
-                  <button class="button-ghost" id="clear-history-button" type="button">Clear history</button>
-                </div>
-              </div>
-            </section>
           </section>
 
-          <div class="actions">
-            <button type="submit">Save settings</button>
-            <button class="button-ghost" id="reset-defaults-button" type="button">Reset to defaults</button>
-            <div id="status" role="status" aria-live="polite"></div>
-          </div>
+          <!-- Extras -->
+          <section id="extras" class="section">
+            <div class="section-head">
+              <h2>Info files</h2>
+              <p>Optional extra files saved next to your downloads.</p>
+            </div>
+            <div class="card">
+              <label class="row">
+                <span class="row-text">
+                  <span class="row-title">Save an info file with each download</span>
+                  <span class="row-help">A small .json file with the caption, date, account, and original links.</span>
+                </span>
+                <span class="switch"><input type="checkbox" name="saveMetadataSidecar"><span class="switch-track"></span></span>
+              </label>
+              <div class="sub-rows" data-depends="saveMetadataSidecar">
+                <label class="row">
+                  <span class="row-text">
+                    <span class="row-title">Include comments</span>
+                    <span class="row-help">Adds the post's comments when available. Makes downloads slower.</span>
+                  </span>
+                  <span class="switch"><input type="checkbox" name="exportPostComments"><span class="switch-track"></span></span>
+                </label>
+                <label class="row">
+                  <span class="row-text">
+                    <span class="row-title">Keep info files in a separate folder</span>
+                    <span class="row-help">Puts them in a <code>_metadata</code> folder instead of next to the media.</span>
+                  </span>
+                  <span class="switch"><input type="checkbox" name="placeMetadataInSubfolder"><span class="switch-track"></span></span>
+                </label>
+                <div class="row row-stack">
+                  <label class="row-title" for="metadataFilenameTemplate">Info file name</label>
+                  <input id="metadataFilenameTemplate" name="metadataFilenameTemplate" class="input mono template-input" type="text" spellcheck="false">
+                </div>
+              </div>
+              <label class="row">
+                <span class="row-text">
+                  <span class="row-title">Save a download report</span>
+                  <span class="row-help">A .json summary of what was saved, skipped, or failed, kept in a <code>_reports</code> folder.</span>
+                </span>
+                <span class="switch"><input type="checkbox" name="exportBatchReport"><span class="switch-track"></span></span>
+              </label>
+            </div>
+          </section>
         </form>
-      </section>
-    </main>
-    <script src="options.js"></script>
+
+        <!-- History -->
+        <section id="history" class="section">
+          <div class="section-head">
+            <h2>History</h2>
+            <p>Your recent downloads. This list is also how "Skip files you already have" knows what you've saved. It stays on this computer.</p>
+          </div>
+          <div class="card">
+            <ul id="history-list" class="history-list" aria-live="polite"></ul>
+            <div class="row card-footer">
+              <p id="history-count" class="row-help"></p>
+              <div class="button-group">
+                <button id="export-history-button" class="button" type="button">Export</button>
+                <button id="clear-history-button" class="button danger" type="button">Clear history</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card danger-zone">
+            <div class="row">
+              <div class="row-text">
+                <p class="row-title">Reset settings</p>
+                <p class="row-help">Puts every setting back to its default. Your history is kept.</p>
+              </div>
+              <button id="reset-defaults-button" class="button danger" type="button">Reset to defaults</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
   </body>
 </html>

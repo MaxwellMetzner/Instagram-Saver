@@ -1,541 +1,141 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Instagram Saver</title>
-    <style>
-      :root {
-        --bg: #fff6fb;
-        --surface: rgba(255, 255, 255, 0.94);
-        --panel: rgba(255, 255, 255, 0.92);
-        --panel-strong: #ffffff;
-        --text: #24152f;
-        --muted: #6f5f7d;
-        --accent: #c2185b;
-        --accent-strong: #7b1fa2;
-        --secondary: #f59e0b;
-        --secondary-strong: #ec4899;
-        --error: #c62828;
-        --border: rgba(123, 31, 162, 0.12);
-        --shadow: 0 20px 44px rgba(104, 33, 122, 0.16);
-        --hero-gradient: linear-gradient(135deg, rgba(255, 214, 10, 0.28), rgba(236, 72, 153, 0.18) 45%, rgba(123, 31, 162, 0.22));
-        --surface-gradient: linear-gradient(135deg, rgba(255, 236, 179, 0.8), rgba(252, 228, 236, 0.92) 52%, rgba(243, 229, 245, 0.96));
-        --metric-gradient: linear-gradient(160deg, rgba(255, 224, 130, 0.88), rgba(244, 143, 177, 0.82) 52%, rgba(206, 147, 216, 0.82));
-        --detail-gradient: linear-gradient(160deg, rgba(255, 248, 225, 0.98), rgba(252, 228, 236, 0.96) 55%, rgba(243, 229, 245, 0.98));
-      }
-
-      html[data-theme="light"] {
-        --bg: #f6f7fb;
-        --surface: rgba(255, 255, 255, 0.96);
-        --panel: rgba(255, 255, 255, 0.96);
-        --panel-strong: #ffffff;
-        --text: #18212b;
-        --muted: #647181;
-        --accent: #2563eb;
-        --accent-strong: #1d4ed8;
-        --secondary: #0891b2;
-        --secondary-strong: #0f766e;
-        --border: rgba(37, 99, 235, 0.12);
-        --shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
-        --hero-gradient: linear-gradient(135deg, rgba(219, 234, 254, 0.92), rgba(240, 249, 255, 0.96) 55%, rgba(236, 253, 245, 0.92));
-        --surface-gradient: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96));
-        --metric-gradient: linear-gradient(160deg, rgba(219, 234, 254, 0.96), rgba(224, 242, 254, 0.94) 50%, rgba(236, 253, 245, 0.96));
-        --detail-gradient: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96));
-      }
-
-      html[data-theme="dark"] {
-        --bg: #0f1117;
-        --surface: rgba(24, 28, 39, 0.94);
-        --panel: rgba(17, 20, 29, 0.96);
-        --panel-strong: #171b25;
-        --text: #f3f4f6;
-        --muted: #a8b0c0;
-        --accent: #f472b6;
-        --accent-strong: #c084fc;
-        --secondary: #f59e0b;
-        --secondary-strong: #fb7185;
-        --border: rgba(192, 132, 252, 0.18);
-        --shadow: 0 22px 52px rgba(0, 0, 0, 0.4);
-        --hero-gradient: linear-gradient(180deg, rgba(29, 34, 46, 0.98), rgba(20, 24, 34, 0.96));
-        --surface-gradient: linear-gradient(180deg, rgba(27, 32, 45, 0.98), rgba(19, 23, 34, 0.96));
-        --metric-gradient: linear-gradient(160deg, rgba(43, 49, 66, 0.98), rgba(31, 36, 49, 0.96));
-        --detail-gradient: linear-gradient(180deg, rgba(31, 36, 49, 0.98), rgba(22, 26, 37, 0.96));
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      html {
-        width: 392px;
-        min-width: 392px;
-      }
-
-      body {
-        margin: 0;
-        width: 392px;
-        min-width: 392px;
-        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-        color: var(--text);
-        background:
-          radial-gradient(circle at top left, rgba(255, 214, 10, 0.32), transparent 34%),
-          radial-gradient(circle at center right, rgba(236, 72, 153, 0.2), transparent 42%),
-          radial-gradient(circle at bottom left, rgba(123, 31, 162, 0.18), transparent 38%),
-          var(--bg);
-      }
-
-      main {
-        padding: 16px;
-      }
-
-      .panel {
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(255, 250, 252, 0.93));
-        border: 1px solid var(--border);
-        border-radius: 28px;
-        box-shadow: var(--shadow);
-        padding: 18px;
-        -webkit-backdrop-filter: blur(12px);
-        backdrop-filter: blur(12px);
-        overflow: hidden;
-      }
-
-      html[data-theme="dark"] .panel {
-        background: linear-gradient(180deg, rgba(18, 21, 31, 0.98), rgba(13, 16, 24, 0.96));
-      }
-
-      .hero {
-        display: grid;
-        gap: 12px;
-        padding: 14px;
-        border-radius: 22px;
-        background: var(--hero-gradient);
-        border: 1px solid rgba(194, 24, 91, 0.14);
-      }
-
-      html[data-theme="dark"] .hero {
-        border-color: rgba(192, 132, 252, 0.16);
-      }
-
-      .hero-top {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-      }
-
-      .title-block {
-        min-width: 0;
-      }
-
-      h1 {
-        margin: 0;
-        font-size: 1.65rem;
-        line-height: 1.05;
-        letter-spacing: -0.03em;
-        font-weight: 700;
-      }
-
-      .subtitle {
-        margin: 4px 0 0;
-        font-size: 0.92rem;
-        line-height: 1.45;
-        color: var(--muted);
-      }
-
-      .pill {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        padding: 7px 12px;
-        border-radius: 999px;
-        font-size: 0.72rem;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        background: rgba(255, 255, 255, 0.78);
-        color: #8e145d;
-        white-space: nowrap;
-        box-shadow: inset 0 0 0 1px rgba(194, 24, 91, 0.12);
-      }
-
-      html[data-theme="light"] .pill {
-        background: rgba(255, 255, 255, 0.88);
-        color: #1d4ed8;
-        box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.12);
-      }
-
-      html[data-theme="dark"] .pill {
-        background: rgba(17, 20, 29, 0.72);
-        color: #f9a8d4;
-        box-shadow: inset 0 0 0 1px rgba(244, 114, 182, 0.18);
-      }
-
-      .stack {
-        display: grid;
-        gap: 12px;
-        margin-top: 14px;
-        min-width: 0;
-      }
-
-      .surface {
-        min-width: 0;
-        padding: 14px;
-        border-radius: 22px;
-        border: 1px solid rgba(194, 24, 91, 0.1);
-        background: var(--surface-gradient);
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
-      }
-
-      html[data-theme="dark"] .surface,
-      html[data-theme="dark"] .details-panel {
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-      }
-
-      .details-panel {
-        min-width: 0;
-        border-radius: 22px;
-        padding: 14px;
-        background: var(--surface-gradient);
-        border: 1px solid rgba(194, 24, 91, 0.1);
-        overflow: hidden;
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
-      }
-
-      .details-panel summary {
-        cursor: pointer;
-        font-size: 0.86rem;
-        font-weight: 700;
-        color: var(--text);
-        list-style: none;
-        min-width: 0;
-      }
-
-      .details-panel summary::-webkit-details-marker {
-        display: none;
-      }
-
-      .details-panel summary::after {
-        content: "+";
-        float: right;
-        color: var(--accent-strong);
-        margin-left: 10px;
-      }
-
-      .details-panel[open] summary::after {
-        content: "−";
-      }
-
-      .details-body {
-        display: grid;
-        gap: 12px;
-        margin-top: 12px;
-        min-width: 0;
-      }
-
-      .detail-block {
-        min-width: 0;
-        padding: 12px;
-        border-radius: 18px;
-        background: var(--detail-gradient);
-        border: 1px solid rgba(123, 31, 162, 0.1);
-      }
-
-      .label {
-        margin: 0 0 6px;
-        font-size: 0.72rem;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--muted);
-      }
-
-      .value {
-        margin: 0;
-        font-size: 0.92rem;
-        line-height: 1.45;
-        overflow-wrap: anywhere;
-        word-break: break-word;
-      }
-
-      .value + .value {
-        margin-top: 8px;
-      }
-
-      .metrics {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 10px;
-        min-width: 0;
-      }
-
-      .metric {
-        min-width: 0;
-        padding: 14px 10px;
-        border-radius: 18px;
-        background: var(--metric-gradient);
-        border: 1px solid rgba(123, 31, 162, 0.12);
-        text-align: center;
-        color: #3e1038;
-      }
-
-      html[data-theme="light"] .metric {
-        color: #1e3a8a;
-      }
-
-      html[data-theme="dark"] .metric {
-        color: #fdf2f8;
-      }
-
-      .metric strong {
-        display: block;
-        font-size: 1.18rem;
-      }
-
-      .metric span {
-        display: block;
-        margin-top: 4px;
-        font-size: 0.76rem;
-        color: rgba(62, 16, 56, 0.78);
-      }
-
-      html[data-theme="light"] .metric span {
-        color: rgba(30, 58, 138, 0.76);
-      }
-
-      html[data-theme="dark"] .metric span {
-        color: rgba(243, 244, 246, 0.8);
-      }
-
-      .actions {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-      }
-
-      .crawl-summary {
-        margin: 0;
-        font-size: 0.84rem;
-        line-height: 1.45;
-        color: var(--muted);
-        overflow-wrap: anywhere;
-      }
-
-      button {
-        border: 0;
-        border-radius: 16px;
-        min-width: 0;
-        padding: 11px 14px;
-        font: inherit;
-        font-weight: 700;
-        cursor: pointer;
-        color: #fff;
-        box-shadow: 0 10px 18px rgba(15, 23, 42, 0.08);
-      }
-
-      .primary {
-        background: linear-gradient(135deg, #f59e0b, #ec4899 48%, #7b1fa2);
-      }
-
-      html[data-theme="light"] .primary {
-        background: linear-gradient(135deg, #2563eb, #0ea5e9 52%, #14b8a6);
-      }
-
-      html[data-theme="dark"] .primary {
-        background: linear-gradient(135deg, #fb7185, #f472b6 48%, #a855f7);
-      }
-
-      .secondary {
-        background: linear-gradient(135deg, #ffd60a, #fb7185 55%, #a855f7);
-        color: #3d1135;
-      }
-
-      html[data-theme="light"] .secondary {
-        background: linear-gradient(135deg, #38bdf8, #22c55e);
-        color: #0f172a;
-      }
-
-      html[data-theme="dark"] .secondary {
-        background: linear-gradient(135deg, #f59e0b, #fb7185 55%, #c084fc);
-        color: #111827;
-      }
-
-      .ghost {
-        color: var(--text);
-        background: rgba(255, 255, 255, 0.86);
-        border: 1px solid rgba(194, 24, 91, 0.12);
-        box-shadow: none;
-      }
-
-      html[data-theme="dark"] .ghost {
-        background: rgba(20, 24, 34, 0.92);
-        border-color: rgba(192, 132, 252, 0.18);
-      }
-
-      button:disabled {
-        cursor: wait;
-        opacity: 0.7;
-      }
-
-      ul {
-        margin: 0;
-        padding-left: 18px;
-        min-width: 0;
-      }
-
-      li {
-        margin: 0 0 6px;
-        line-height: 1.4;
-        font-size: 0.88rem;
-        overflow-wrap: anywhere;
-        word-break: break-word;
-      }
-
-      .status {
-        min-height: 1.2em;
-        margin: 0;
-        font-size: 0.84rem;
-        color: var(--muted);
-      }
-
-      .status-surface {
-        display: grid;
-        gap: 8px;
-      }
-
-      .status-actions {
-        display: flex;
-        justify-content: flex-end;
-      }
-
-      .status-actions button {
-        min-width: 0;
-      }
-
-      .status-heading {
-        margin: 0;
-        font-size: 0.72rem;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: #8e145d;
-      }
-
-      .error {
-        color: var(--error);
-      }
-
-      .hidden {
-        display: none;
-      }
-
-      @media (max-width: 420px) {
-        main {
-          padding: 12px;
-        }
-      }
-    </style>
+    <link rel="stylesheet" href="../shared/theme.css">
+    <link rel="stylesheet" href="popup.css">
+    <script type="module" src="popup.js"></script>
   </head>
   <body>
-    <main>
-      <section class="panel">
-        <section class="hero">
-          <div class="hero-top">
-            <div class="title-block">
-              <h1>Instagram Saver</h1>
-              <p class="subtitle" id="headline">Checking the current page through the authenticated Instagram APIs.</p>
-            </div>
-            <span class="pill" id="page-kind-pill">Loading</span>
-          </div>
-        </section>
-
-        <div class="stack">
-          <section class="surface actions" id="action-card">
-            <button class="primary" id="download-button" type="button" title="Download the media resolved for the current Instagram page.">Download</button>
-            <button class="ghost" id="refresh-button" type="button">Refresh</button>
-            <button class="ghost" id="settings-button" type="button">Settings</button>
-            <button class="secondary hidden" id="crawl-button" type="button" title="Walk the entire profile in resumable batches beyond the normal Download preview.">Start Full Crawl</button>
-          </section>
-
-          <section class="surface status-surface">
-            <p class="status-heading">Status</p>
-            <p class="crawl-summary hidden" id="crawl-summary"></p>
-            <p class="status" id="status"></p>
-            <div class="status-actions hidden" id="crawl-status-actions">
-              <button class="ghost" id="reset-crawl-button" type="button">Reset Crawl</button>
-            </div>
-          </section>
+    <header class="app-header">
+      <div class="brand">
+        <img src="../../icons/icon32.png" alt="" width="24" height="24">
+        <div class="brand-text">
+          <h1>Instagram Saver</h1>
+          <p id="page-subtitle" class="muted">Checking this page…</p>
         </div>
+      </div>
+      <div class="header-actions">
+        <button id="refresh-button" class="icon-button" type="button" title="Check the page again" aria-label="Check the page again">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        </button>
+        <button id="settings-button" class="icon-button" type="button" title="Settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+      </div>
+    </header>
 
-        <div class="stack">
-          <section class="metrics hidden" id="metrics-card">
-            <div class="metric">
-              <strong id="total-count">0</strong>
-              <span>Total files</span>
-            </div>
-            <div class="metric">
-              <strong id="image-count">0</strong>
-              <span>Images</span>
-            </div>
-            <div class="metric">
-              <strong id="video-count">0</strong>
-              <span>Videos</span>
-            </div>
-          </section>
+    <main>
+      <section id="loading-card" class="card loading-card">
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Looking for media on this page…</p>
+      </section>
 
-          <details class="details-panel hidden" id="details-card">
-            <summary>Expanded information</summary>
-            <div class="details-body">
-              <section class="detail-block">
-                <p class="label">Current Page</p>
-                <p class="value" id="page-target"></p>
-              </section>
-
-              <section class="detail-block">
-                <p class="label">Resolver Source</p>
-                <p class="value" id="resolver-source"></p>
-              </section>
-
-              <section class="detail-block">
-                <p class="label">Duplicate Handling</p>
-                <p class="value" id="duplicate-note"></p>
-              </section>
-
-              <section class="detail-block">
-                <p class="label">Metadata Sidecar</p>
-                <p class="value" id="metadata-note"></p>
-              </section>
-
-              <section class="detail-block hidden" id="batch-diagnostics-block">
-                <p class="label">Batch Diagnostics</p>
-                <ul id="batch-diagnostics-list"></ul>
-              </section>
-
-              <section class="detail-block hidden" id="crawl-diagnostics-block">
-                <p class="label">Full Crawl</p>
-                <ul id="crawl-diagnostics-list"></ul>
-              </section>
-
-              <section class="detail-block">
-                <p class="label">Planned Files</p>
-                <ul id="file-list"></ul>
-              </section>
-            </div>
-          </details>
-
-          <section class="details-panel hidden" id="error-card">
-            <p class="label">Why It Failed</p>
-            <p class="value error" id="error-title"></p>
-            <p class="value hidden" id="error-message"></p>
-            <p class="value hidden" id="error-suggestion"></p>
-            <p class="value hidden" id="error-request"></p>
-            <section class="detail-block hidden" id="error-diagnostics-block">
-              <p class="label">Resolver Diagnostics</p>
-              <ul id="error-diagnostics-list"></ul>
-            </section>
-          </section>
+      <section id="page-card" class="card page-card hidden" aria-label="This page">
+        <div class="page-heading">
+          <span id="page-kind-pill" class="pill">Post</span>
+          <span id="page-owner" class="page-owner"></span>
+        </div>
+        <p id="page-title" class="page-title muted hidden"></p>
+        <div class="stats">
+          <div class="stat"><strong id="total-count">0</strong><span id="total-label">files</span></div>
+          <div class="stat"><strong id="image-count">0</strong><span>photos</span></div>
+          <div class="stat"><strong id="video-count">0</strong><span>videos</span></div>
+          <div class="stat"><strong id="duplicate-count">0</strong><span>already saved</span></div>
         </div>
       </section>
+
+      <!-- Posts, reels, stories and highlights -->
+      <section id="single-card" class="card action-card hidden" aria-labelledby="single-heading">
+        <h2 id="single-heading" class="card-heading">Download</h2>
+        <div class="choices">
+          <button id="download-current-button" class="choice primary" type="button">
+            <span class="choice-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8M8.5 12.5 12 16l3.5-3.5"/></svg>
+            </span>
+            <span class="choice-text">
+              <span id="download-current-title" class="choice-title">This slide only</span>
+              <span id="download-current-detail" class="choice-detail"></span>
+            </span>
+          </button>
+          <button id="download-all-button" class="choice" type="button">
+            <span class="choice-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="13" height="13" rx="3"/><path d="M4 16V6a2 2 0 0 1 2-2h10"/></svg>
+            </span>
+            <span class="choice-text">
+              <span id="download-all-title" class="choice-title">Everything</span>
+              <span id="download-all-detail" class="choice-detail"></span>
+            </span>
+          </button>
+        </div>
+        <p id="current-note" class="hint hidden"></p>
+      </section>
+
+      <!-- Profiles and saved posts -->
+      <section id="quick-card" class="card action-card hidden" aria-labelledby="quick-heading">
+        <div class="card-header">
+          <h2 id="quick-heading" class="card-heading">Quick download</h2>
+          <span class="tag">One-time</span>
+        </div>
+        <p id="quick-description" class="card-text"></p>
+        <button id="quick-download-button" class="button primary block" type="button">Download latest posts</button>
+      </section>
+
+      <section id="bulk-card" class="card action-card hidden" aria-labelledby="bulk-heading">
+        <div class="card-header">
+          <h2 id="bulk-heading" class="card-heading">Bulk download</h2>
+          <span id="bulk-status-chip" class="chip" data-tone="neutral">Not started</span>
+        </div>
+        <p id="bulk-explainer" class="card-text"></p>
+
+        <div id="bulk-progress" class="bulk-progress hidden" aria-live="polite">
+          <div class="progress-track"><span id="bulk-progress-fill" class="progress-fill"></span></div>
+          <p id="bulk-progress-text" class="hint"></p>
+        </div>
+
+        <dl id="bulk-stats" class="bulk-stats hidden">
+          <div><dt>Posts</dt><dd id="bulk-posts">0</dd></div>
+          <div><dt>Files saved</dt><dd id="bulk-files">0</dd></div>
+          <div><dt>Skipped</dt><dd id="bulk-skipped">0</dd></div>
+        </dl>
+
+        <p id="bulk-detail" class="card-text hidden"></p>
+
+        <div class="button-row">
+          <button id="bulk-primary-button" class="button primary" type="button">Start bulk download</button>
+          <button id="bulk-reset-button" class="button ghost hidden" type="button">Start over</button>
+        </div>
+        <p id="bulk-settings-hint" class="hint"></p>
+      </section>
+
+      <section id="error-card" class="card error-card hidden" role="alert">
+        <h2 id="error-title" class="error-title">Something went wrong</h2>
+        <p id="error-message" class="hidden"></p>
+        <p id="error-suggestion" class="error-suggestion hidden"></p>
+        <p id="error-request" class="error-request hidden"></p>
+        <ul id="error-diagnostics-list" class="diagnostics hidden"></ul>
+      </section>
+
+      <details id="details-card" class="card details-card hidden">
+        <summary>Details</summary>
+        <div class="details-body">
+          <div class="detail-row"><span>Duplicates</span><span id="duplicate-note"></span></div>
+          <div class="detail-row"><span>Info file</span><span id="metadata-note"></span></div>
+          <div class="detail-row"><span>Found via</span><span id="resolver-source"></span></div>
+          <div>
+            <p class="detail-label">Files</p>
+            <ul id="file-list" class="file-list"></ul>
+          </div>
+          <div id="batch-diagnostics-block" class="hidden">
+            <p class="detail-label">How the list was built</p>
+            <ul id="batch-diagnostics-list" class="diagnostics"></ul>
+          </div>
+        </div>
+      </details>
     </main>
-    <script src="popup.js"></script>
+
+    <footer id="status" class="status-bar" role="status" aria-live="polite"></footer>
   </body>
 </html>
